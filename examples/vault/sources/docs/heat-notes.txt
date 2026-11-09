@@ -1,0 +1,1 @@
+Heat study log: grids N = 32, 64, 128; alpha = 1; final time T = 0.1.

@@ -1,0 +1,12 @@
+{
+  "name": "scientific-brain",
+  "owner": { "name": "BlackRockJL" },
+  "description": "Scientific Brain: a lean, memory-inspired second brain for research and scientific computing",
+  "plugins": [
+    {
+      "name": "scientific-brain",
+      "source": "./plugin",
+      "description": "Lean second brain for research and scientific computing, modelled on human memory"
+    }
+  ]
+}

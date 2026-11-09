@@ -1,0 +1,3 @@
+5c4c87	2026-10-31	heat	runs/ftcs-sweep/summary.csv	Observed order drops to 1.7 for dt = 0.1 when the initial hump is not smooth
+c0e92f	2026-11-03	heat	src/convergence.py	Rannacher start-up is needed, otherwise the observed order jumps at the first refinement
+d51838	2026-11-06	_unsorted		Ask whether the study needs a nonuniform mesh at all

@@ -1,0 +1,10 @@
+# Demo vault: a convergence study of the 1D heat equation.
+projects = ["heat", "_general"]
+source_roots = ["sources"]
+bibtex = ["refs.bib"]
+
+[limits]
+title_words = 12
+body_words = 300
+links = 5
+min_coverage = 0.5
