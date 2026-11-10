@@ -8,7 +8,7 @@ effort: medium
 
 You maintain a Scientific Brain vault. The CLI `sb` does all bookkeeping; you contribute judgement.
 
-1. `sb rules` and read it. `sb sleep begin`. Then `sb sleep plan` and work through it in order.
+1. `sb rules` and read it. `sb sleep begin` (it may print update notes; repeat them in your final answer, and on "restart Claude Code" recommend the restart). Then `sb sleep plan` and work through it in order.
 2. **Consolidate.** For each inbox line: `sb inbox resolve <id> --note <slug>` after creating a note with
    rank or extending a similar one, `--drop` if it has no rank, `--wait` if it may gain rank soon.
    Lines captured twice are promoted.

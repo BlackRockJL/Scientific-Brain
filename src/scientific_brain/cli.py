@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 from statistics import median
 
-from . import __version__, inbox, sleep, usage
+from . import __version__, inbox, sleep, update, usage
 from .index import Index, fts5_available, match_query
 from .links import WHYS, archive_mark, archive_note, backlinks, rename, restore
 from .schema import TYPES, check, project_error, skeleton
@@ -44,6 +44,8 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 # max_promotion_rate = 0.25                  # `sleep done` warns above this share of promoted inbox lines
 # [index]
 # skip_sections = []                         # headings whose sections stay out of the full-text search
+# [update]
+# auto = true                                # each sleep updates the CLI and the plugin first (SB_NO_UPDATE=1 also stops it)
 """
 
 
@@ -254,7 +256,10 @@ def cmd_stats(a):
 def cmd_sleep(a):
     day = usage.today()
     if a.sub == "begin":
-        print(sleep.begin(find_vault(), day, a.force))
+        v = find_vault()
+        print(sleep.begin(v, day, a.force))
+        for line in update.update(v):
+            print(line)
         return
     if a.sub == "baseline":
         n = sleep.baseline(find_vault())

@@ -113,11 +113,14 @@ The vault can be versioned with git; `sb init` writes a `.gitignore` for the sea
 
 ## Update and uninstall
 
-```bash
-pipx upgrade scientific-brain
-```
+Each sleep starts by bringing both parts up to the latest state of the repository: `pipx reinstall scientific-brain`
+for a pipx install (when the remote `HEAD` differs from the installed commit) and
+`claude plugin marketplace update` plus `claude plugin update` for the plugin. A new plugin loads after a restart
+of Claude Code. Developer (editable) installs are never touched. Switch it off with `auto = false` under
+`[update]` in `sb.toml` or with `SB_NO_UPDATE=1`.
 
-In Claude Code, `/plugin marketplace update scientific-brain` fetches the new plugin version.
+By hand: `pipx reinstall scientific-brain` (`pipx upgrade` does not reinstall a git install with an unchanged
+version number) and `/plugin marketplace update scientific-brain` in Claude Code.
 
 To remove it: `/plugin uninstall scientific-brain@scientific-brain`, `pipx uninstall scientific-brain`, and the
 `SB_VAULT` entry in `settings.json`. The vault is a plain folder and stays untouched.

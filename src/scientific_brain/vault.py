@@ -19,7 +19,8 @@ DEFAULTS = {"projects": [], "folder_map": {}, "source_roots": [], "bibtex": [],
             "lifecycle": {"inbox_wait_days": 30, "sleep_days": 7, "sleep_gap": 1, "sleep_inbox": 30, "new_per_day": 3,
                           "sleep_budget": 40, "forget_budget": 10, "condense_pairs": 5, "condense_coverage": 0.6,
                           "max_promotion_rate": 0.25},
-            "index": {"skip_sections": []}}
+            "index": {"skip_sections": []},
+            "update": {"auto": True}}
 RATES = {"min_coverage", "condense_coverage", "max_promotion_rate"}  # shares; the other limits and lifecycle values are counts
 
 
@@ -128,7 +129,8 @@ class Vault:
                    or (k in ("limits", "lifecycle") and not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0
                                                               for y, x in val.items() if y not in RATES))
                    or (k == "index" and not all(isinstance(x, list) and all(isinstance(s, str) for s in x) for x in val.values()))
-                   or (isinstance(default, dict) and k not in ("folder_map", "index") and not all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                   or (k == "update" and not all(isinstance(x, bool) for x in val.values()))
+                   or (isinstance(default, dict) and k not in ("folder_map", "index", "update") and not all(isinstance(x, (int, float)) and not isinstance(x, bool)
                                                               for x in val.values()))
                    or (isinstance(default, list) and not all(isinstance(x, str) for x in val))
                    or (k == "folder_map" and not all(isinstance(x, str) for x in val.values())))

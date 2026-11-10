@@ -1,6 +1,5 @@
 {
   "name": "scientific-brain",
-  "version": "0.1.0",
   "description": "Skills, a sleep agent and hooks for the Scientific Brain CLI (sb). Install the CLI separately: pipx install git+https://github.com/BlackRockJL/Scientific-Brain",
   "author": { "name": "BlackRockJL" },
   "license": "MIT",
