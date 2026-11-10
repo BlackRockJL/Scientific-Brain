@@ -136,10 +136,10 @@ def test_rules_prints_the_contract():
 
 def test_rules_use_the_vault_limits(tmp_path):
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text("[limits]\ntitle_words = 16\nbody_words = 600\nlinks = 8\n", encoding="utf-8")
+    (v / "sb.toml").write_text("[limits]\ntitle_words = 20\nbody_words = 700\nlinks = 9\n", encoding="utf-8")
     out = sb(v, "rules")[1]
-    assert "at most 16 words, body at most 600 words, at most 8 links" in out and "{" not in out
-    assert "at most 12 words" in sb("unused", "rules")[1]
+    assert "at most 20 words, body at most 700 words, at most 9 links" in out and "{" not in out
+    assert "at most 16 words" in sb("unused", "rules")[1]
 
 
 @pytest.mark.parametrize("n", ["0", "-1", "x"])

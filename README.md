@@ -5,7 +5,7 @@ and modelled on human memory.
 
 - **Selective:** only knowledge with rank becomes a note (own results, decisions, derivations, assessed
   sources, open questions). Everything else is a one-line inbox entry.
-- **Sleep:** a pass, weekly or as often as work arrives, consolidates the inbox, merges near-duplicates, forgets and verifies.
+- **Sleep:** a pass, weekly or as often as work arrives, consolidates the inbox, merges near-duplicates, forgets, verifies and dreams (proposes new links).
 - **Forgetting:** usage is logged; notes that are no longer used fade into an archive. Nothing is deleted.
 - **Small and fast:** pure Python ≥ 3.11, no dependencies, SQLite full-text search.
 
@@ -70,6 +70,20 @@ next sleep promotes, keeps or drops them.
 
 After importing an existing collection of notes, `sb sleep baseline` accepts them as they are, so the first
 sleeps verify only what changes from then on.
+
+## Dreaming
+
+People recombine what they know while they sleep; a note that nothing links to stays a filing-cabinet entry.
+So the fifth phase of every sleep offers a few pairs of notes that are not linked yet (at most `dream_pairs`,
+default 5, 0 switches it off; they cost none of the sleep budget). The tool proposes the candidates
+mechanically: related notes from different projects and from the same project, seeded by new, changed and
+active notes, and one deliberately distant pair (a concept or derivation against a finding or question from
+another project that shares at most one key word). Duplicates, linked pairs and notes that already carry the
+maximum number of links are left out, and each note appears in one pair per sleep. The sleeper agent then judges
+every pair on its own and links it only when one note changes how the other is read. There is no quota: no link
+is the normal outcome. A pair judged unrelated (`sb sleep unrelated <a> <b> "reason"`) is locked and returns after
+a cooldown that fades like note activation (`h_unrelated`, default 90 days); a pair rejected again later stays out
+much longer. `sb sleep done` reports how many pairs were linked, rejected or left open.
 
 ## Everyday use
 

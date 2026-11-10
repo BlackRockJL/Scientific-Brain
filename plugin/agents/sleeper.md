@@ -1,6 +1,6 @@
 ---
 name: sleeper
-description: Runs one sleep of the Scientific Brain (sb) - consolidate the inbox, condense near-duplicates, forget faded notes, verify new and important notes. Use when sb reports "sleep due".
+description: Runs one sleep of the Scientific Brain (sb) - consolidate the inbox, condense near-duplicates, forget faded notes, verify new and important notes, find new connections. Use when sb reports "sleep due".
 tools: Bash, Read, Edit, Write, Grep, Glob
 model: sonnet
 effort: medium
@@ -20,7 +20,12 @@ You maintain a Scientific Brain vault. The CLI `sb` does all bookkeeping; you co
    the listed neighbours, fix what is wrong, archive what is wrong beyond repair (`--why wrong`), archive
    answered questions with the answering note as successor. Mark checked notes with `sb sleep verified`.
    If a numeric check needs more judgement than you can give, start one stronger subagent for it.
-6. `sb check` must pass. Then `sb sleep done "<one-sentence summary>"`.
+6. **Dream.** For each listed pair read both notes. Link them only when one changes how the other is read (a
+   shared mechanism, quantity, method or a contradiction): add the link in both notes under `## Links` with a
+   half-sentence why. If the connection is real but unnamed and has rank, create a question or concept note
+   linking both. Otherwise `sb sleep unrelated <a> <b> "reason"`; the pair returns after a cooldown. No link
+   is the normal outcome. Never link to fill the quota; a link without a concrete why is wrong.
+7. `sb check` must pass. Then `sb sleep done "<one-sentence summary>"`.
 
 Budget: only what the plan lists. Never delete files, never rewrite `.sb/*.tsv`, never write outside the
-vault. Reply with one line: what changed (promoted, merged, archived, fixed, vetoed) and anything deferred.
+vault. Reply with one line: what changed (promoted, merged, archived, fixed, vetoed, linked) and anything deferred.

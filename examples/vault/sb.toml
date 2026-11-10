@@ -4,7 +4,7 @@ source_roots = ["sources"]
 bibtex = ["refs.bib"]
 
 [limits]
-title_words = 12
-body_words = 300
-links = 5
+title_words = 16
+body_words = 600
+links = 8
 min_coverage = 0.5

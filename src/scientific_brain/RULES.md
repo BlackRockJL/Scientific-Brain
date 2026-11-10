@@ -68,7 +68,7 @@ When sb says "sleep due" ({sleep_days} days since the last sleep, more than {sle
 
 1. `sb sleep begin`. From now on your calls are logged as sleep and do not count as use. An unfinished sleep
    blocks a second one (`--force` replaces it).
-2. `sb sleep plan` prints four lists, each entry with its slug or inbox id. Work them in order. Every note you
+2. `sb sleep plan` prints five lists, each entry with its slug or inbox id. Work them in order. Every note you
    change must still pass `sb check`.
    - Consolidate: settle every open inbox line with `sb inbox resolve`. Extend a similar note, or create one
      only with rank, then `--note <slug>`; otherwise `--drop` or `--wait` (at most {inbox_wait_days} days; due lines are
@@ -82,6 +82,7 @@ When sb says "sleep due" ({sleep_days} days since the last sleep, more than {sle
      `sb sleep verified <slug> ...` sets `verified` without touching `updated`. Only verified notes leave the
      list; what you did not verify comes back in the next plan. An answered question is archived with the
      answering note as successor.
+   - Dream: link a pair (with a why) only if one changes how the other is read, else `sb sleep unrelated`.
 3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed, logs the sleep and prints one
    line. It warns when more than {max_promotion_rate} of at least ten settled inbox lines were promoted.
 

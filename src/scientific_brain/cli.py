@@ -23,14 +23,15 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 # source_roots = ["../project"]              # where `sources:` paths are resolved
 # bibtex = ["refs.bib"]                      # BibTeX files for `ref:` of source notes
 # [limits]
-# title_words = 12
-# body_words = 300
-# links = 5
+# title_words = 16
+# body_words = 600
+# links = 8
 # min_coverage = 0.5                         # share of the search terms a match must contain
 # [activation]                               # weights per event, horizon H in days (h, h_<type>)
 # recall = 0.2
 # h = 90
 # h_decision = 180
+# h_unrelated = 90                           # days a dream pair judged unrelated stays out (fades like a note)
 # [lifecycle]
 # inbox_wait_days = 30                       # an open line older than this is due
 # sleep_days = 7                             # "sleep due" after this many days without sleep ...
@@ -42,6 +43,7 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 # condense_pairs = 5                         # near-duplicate pairs before verify; more only if budget is left
 # condense_coverage = 0.6                    # share of a note's title and cue words found in a near-duplicate
 # max_promotion_rate = 0.25                  # `sleep done` warns above this share of promoted inbox lines
+# dream_pairs = 5                            # unlinked note pairs a sleep plan offers for linking; 0 switches it off
 # [index]
 # skip_sections = []                         # headings whose sections stay out of the full-text search
 # [update]
@@ -272,6 +274,9 @@ def cmd_sleep(a):
     elif a.sub == "veto":
         sleep.veto(v, a.slug, a.reason, day)
         print(f"veto for {a.slug} logged")
+    elif a.sub == "unrelated":
+        sleep.unrelated(v, a.a, a.b, a.reason, day)
+        print(f"pair {a.a} ~ {a.b} logged as unrelated; it returns after the cooldown")
     elif a.sub == "verified":
         if sleep.started(v) is None:
             raise SbError("sleep verified works only during a sleep (sb sleep begin)")
@@ -391,11 +396,15 @@ def main(argv=None) -> int:
     sp = cmd("restore", cmd_restore, "move an archived note back")
     sp.add_argument("slug")
     sp.add_argument("--force", action="store_true", help="restore a note that was archived as wrong")
-    sp = cmd("sleep", cmd_sleep, "run a sleep: begin, plan, veto, verified, done; baseline").add_subparsers(dest="sub", required=True)
+    sp = cmd("sleep", cmd_sleep, "run a sleep: begin, plan, veto, unrelated, verified, done; baseline").add_subparsers(dest="sub", required=True)
     sp.add_parser("begin", help="start a sleep").add_argument("--force", action="store_true", help="replace a running sleep")
-    sp.add_parser("plan", help="candidate lists for the four phases").add_argument("-o", "--out", help="write to this file")
+    sp.add_parser("plan", help="candidate lists for the five phases").add_argument("-o", "--out", help="write to this file")
     q = sp.add_parser("veto", help="keep a forget candidate")
     q.add_argument("slug")
+    q.add_argument("reason")
+    q = sp.add_parser("unrelated", help="judge a dream pair unrelated; it is locked for a while")
+    q.add_argument("a")
+    q.add_argument("b")
     q.add_argument("reason")
     sp.add_parser("verified", help="mark notes as checked").add_argument("slugs", nargs="+")
     sp.add_parser("done", help="end the sleep").add_argument("summary")

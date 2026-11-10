@@ -157,7 +157,8 @@ def test_done_expires_logs_snapshot_and_clears_due(tmp_path):
     sb(v, "sleep", "begin")
     sb(v, "sleep", "plan")  # only lines a plan of this sleep showed can expire
     code, out, _ = sb(v, "sleep", "done", "first sleep")
-    assert code == 0 and out.strip() == "slept 2026-11-08: 1 inbox lines settled (0 promoted), 0 archived, 0 created, 0 vetoes"
+    assert code == 0 and out.splitlines()[0] == "slept 2026-11-08: 1 inbox lines settled (0 promoted), 0 archived, 0 created, 0 vetoes"
+    assert out.splitlines()[1].startswith("dream: 0 linked, 0 unrelated, ")  # the demo vault has unlinked pairs
     assert tsv(v, "inbox-done.tsv") == [["dddddd", "2026-11-08", "expired"]]
     assert tsv(v, "sleep.tsv") == [["2026-11-08", "1", "0", "0", "0", "0", "first sleep"]]
     assert [r[0] for r in tsv(v, "snapshot.tsv")] == ["ftcs-stability-limit"] and not sleeping(v).exists()

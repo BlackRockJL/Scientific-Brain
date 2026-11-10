@@ -1,10 +1,11 @@
-"""Sleep: the plan of candidate lists for the four phases, veto, verified and done."""
+"""Sleep: the plan of candidate lists for the five phases, veto, unrelated, verified and done."""
 from __future__ import annotations
 
 import hashlib
 import re
 from collections import Counter
 from datetime import date
+from itertools import permutations
 
 from . import inbox, usage
 from .index import fold, prepare
@@ -13,6 +14,8 @@ from .vault import SbError, Vault, clean
 
 SLEEPING, SNAP = "sleeping", "snapshot.tsv"  # .sb/ files: running sleep (start date, then shown/verified ids), slug+hash of checked notes
 HOT = 20  # verify (b) looks at the HOT most active notes and takes the oldest verified of them
+UNRELATED = "unrelated.tsv"  # .sb/ file: date, slug, slug, reason of every pair judged unrelated
+SEEDS, FAR_POOL = 20, 50  # dream: notes that seed the near pairs; most active concepts and derivations for the far pair
 MIN_PROMOTION = 10  # the promotion warning needs at least this many settled lines to mean anything
 
 
@@ -138,17 +141,26 @@ def plan(v: Vault, idx, day: date) -> str:
     cands = usage.forget_candidates(v, day, sc)
     forget = [(s, t, a, th) for s, t, a, th in cands[:lc["forget_budget"]] if take(s)]
     snap, last = snapshot(v), usage.last_sleep(v)
+    def fresh(s, n) -> bool:
+        """Changed or created since the last sleep (everything before the first)."""
+        return not last or (s in snap and snap[s] != digest(n)) or str(n.get("created") or "") >= last.isoformat()
+
+    def cover(s, o, ws=None) -> float:
+        """Share of the title and cue words of s found in o, the smaller of both ways: an overview note contains the
+        words of every note it summarises, yet duplicates neither."""
+        ws = ws or keys(f"{notes[s].get('title')} {notes[s].get('cue')}", 0, 8)
+        back = keys(f"{notes[o].get('title')} {notes[o].get('cue')}", 0, 8) or ws
+        return min(sum(w in txt[o] for w in ws) / len(ws), sum(w in txt[s] for w in back) / len(back)) if ws else 0.0
+
     found = {}  # near-duplicate pairs: frozenset -> coverage; after the first sleep only notes changed or created since
     for s, n in notes.items():
-        if last and not (s in snap and snap[s] != digest(n)) and str(n.get("created") or "") < last.isoformat():
+        if not fresh(s, n):
             continue
         ws = keys(f"{n.get('title')} {n.get('cue')}", 0, 8)
         if ws and (hit := near(ws, s, 1, 0)) and (o := hit[0][0]) in notes:  # coverage is measured below, not by the index
             if o in n.targets or s in notes[o].targets:  # linked parts of one topic are not duplicates
                 continue
-            back = keys(f"{notes[o].get('title')} {notes[o].get('cue')}", 0, 8) or ws
-            # both ways: an overview note contains the words of every note it summarises, yet duplicates neither
-            pair, cov = frozenset((s, o)), min(sum(w in txt[o] for w in ws) / len(ws), sum(w in txt[s] for w in back) / len(back))
+            pair, cov = frozenset((s, o)), cover(s, o, ws)
             if cov >= lc["condense_coverage"]:
                 found[pair] = max(cov, found.get(pair, 0))
     found_all = sorted(found, key=lambda p: (len({notes[s].folder for s in p}) > 1, -found[p], sorted(p)))
@@ -162,6 +174,8 @@ def plan(v: Vault, idx, day: date) -> str:
     hot = sorted((x for x in sc if x[0] not in changed), key=lambda x: -x[3])[:HOT]
     verify_b = [x for x in sorted(hot, key=lambda x: notes[x[0]].get("verified") or "")[:10] if take(x[0])]
 
+    dream = dream_pairs(v, notes, sc, day, found, keys, near, cover, fresh)
+    remember(v, "dream", (f"{a}|{b}" for a, b, _ in dream))
     out = [f"# Sleep plan {day}", f"touched: {len(touched)} of {lc['sleep_budget']} (notes and inbox lines), deferred: {deferred[0]}",
            "", f"## 1. Consolidate: {len(lines)} open inbox lines",
            "Settle each with `sb inbox resolve <id> --note <slug>` (extend or create the note first), `--drop` or `--wait`."]
@@ -185,7 +199,95 @@ def plan(v: Vault, idx, day: date) -> str:
         out.append(f"- {s} ({'changed' if s in snap else 'new'}) [{n.get('type')}, {n.folder}] sources: " + (", ".join(n.get("sources", [])) or "none"))
         out.append("  compare with: " + ("; ".join(f"{r[0]} ({r[4]})" for r in near(keys(f"{n.get('title')} {n.gist}", 2, 8), s, 3, 0.2)) or "none"))
     out += [f"- {s} (A={a:.2f}, verified {notes[s].get('verified') or 'never'})" for s, _, _, a, _ in verify_b]
+    out += ["", f"## 5. Dream: {len(dream)} candidate pairs",
+            "For each pair read both notes. Link them only when one changes how the other is read (a shared mechanism, quantity, method "
+            "or a contradiction): add the link in both notes under `## Links` with a half-sentence why. If the connection is real but "
+            "unnamed and has rank, create a question or concept note linking both. Otherwise `sb sleep unrelated <a> <b> \"reason\"`. "
+            "No link is the normal outcome."]
+    for a, b, kind in dream:
+        out.append(f"- {a} ~ {b} ({kind}; {notes[a].folder}, {notes[b].folder})")
+        out += [f"  {s} [{notes[s].get('type')}]: {sentence(notes[s].gist)}" for s in (a, b)]
     return "\n".join(out) + "\n"
+
+
+def sentence(text: str, cap=200) -> str:
+    """First sentence, cut at cap characters."""
+    s = re.split(r"(?<=[.!?])\s", text.strip(), maxsplit=1)[0]
+    return s if len(s) <= cap else s[:cap - 3].rstrip() + "..."
+
+
+def rejected(v: Vault) -> dict:
+    """Pair (frozenset of current slugs) -> dates it was judged unrelated; rows follow renames."""
+    m, out = usage.renames(v), {}
+    for d, a, b, _ in v.rows(UNRELATED, 4):
+        try:
+            out.setdefault(frozenset((m.get(a, a), m.get(b, b))), []).append(date.fromisoformat(d))
+        except ValueError:
+            continue
+    return out
+
+
+def locked(v: Vault, day: date) -> set:
+    """Pairs whose rejections still reach the threshold; like a note's activation they fade by a power law."""
+    th = usage.threshold(v, "unrelated")
+    return {p for p, ds in rejected(v).items() if usage.activation({d: 1.0 for d in ds}, day) >= th - usage.EPS}
+
+
+def dream_pairs(v: Vault, notes, sc, day, found, keys, near, cover, fresh) -> list:
+    """(a, b, kind) of unlinked notes worth a look: near pairs across projects and within one, seeded by new, changed and
+    active notes, then one far pair. Duplicates, saturated notes, locked pairs stay out; a note appears once."""
+    lc, lim = v.cfg["lifecycle"], v.cfg["limits"]["links"]
+    if not (want := lc["dream_pairs"]):
+        return []
+    lock, used, out = locked(v, day), set(), []
+
+    def free(a, b) -> bool:
+        return (a != b and a in notes and b in notes and b not in notes[a].targets and a not in notes[b].targets
+                and frozenset((a, b)) not in found and frozenset((a, b)) not in lock
+                and max(len(notes[a].targets), len(notes[b].targets)) < lim and cover(a, b) < lc["condense_coverage"])
+
+    def pick(pool, kind, k, cap):
+        for a, b in pool:
+            if k <= 0 or len(out) >= cap:
+                return
+            if not used & {a, b}:
+                used.update((a, b))
+                out.append((*sorted((a, b)), kind))
+                k -= 1
+
+    new = sorted((s for s, n in notes.items() if fresh(s, n)), key=lambda s: (str(notes[s].get("created")), s), reverse=True)
+    seeds = list(dict.fromkeys(new + [x[0] for x in sorted(sc, key=lambda x: -x[3])]))[:SEEDS]
+    across, within, seen = [], [], set()
+    for s in seeds:
+        n = notes[s]
+        for r in near(keys(f"{n.get('title')} {n.get('cue')} {n.gist}", 0, 8), s, 10, 0.2):
+            if (p := frozenset((s, r[0]))) not in seen and free(s, r[0]):
+                seen.add(p)
+                (across if n.folder != notes[r[0]].folder else within).append((s, r[0]))
+    near_n = max(want - 1, 1)  # the last place is the far pair
+    pick(across, "across projects", (near_n + 1) // 2, near_n)
+    pick(within, "same project", near_n // 2, near_n)
+    pick(across, "across projects", near_n, near_n)  # a kind with too few candidates is filled up by the other
+    pick(within, "same project", near_n, near_n)
+    if want > 1:
+        top = [x[0] for x in sorted(sc, key=lambda x: -x[3]) if x[1] in ("concept", "derivation") and x[0] in notes][:FAR_POOL]
+        ks = {}  # slug -> title and cue keys
+
+        def key_set(s):
+            return ks.setdefault(s, set(keys(f"{notes[s].get('title')} {notes[s].get('cue')}")))
+
+        far = sorted(((a, b) for a in top for b, n in notes.items() if n.get("type") in ("finding", "question")
+                      and n.folder != notes[a].folder and len(key_set(a) & key_set(b)) <= 1),
+                     key=lambda p: hashlib.sha256(f"{day}{p[0]}{p[1]}".encode()).hexdigest())
+        for a, b in far:
+            if not used & {a, b} and free(a, b):
+                used.update((a, b))
+                out.append((a, b, "far"))
+                break
+        else:
+            pick(across, "across projects", want, want)
+            pick(within, "same project", want, want)
+    return out
 
 
 def veto(v: Vault, slug: str, reason: str, day: date):
@@ -195,6 +297,18 @@ def veto(v: Vault, slug: str, reason: str, day: date):
         raise SbError("a veto needs a reason of one sentence")
     usage.log(v, "veto", slug, day)
     v.append("vetoes.tsv", day.isoformat(), slug, reason)
+
+
+def unrelated(v: Vault, a: str, b: str, reason: str, day: date):
+    """Log a dream pair as unrelated; it is locked for a while (see `locked`)."""
+    for s in (a, b):
+        if not v.find(s, ("notes",)):
+            raise SbError(f"no note '{s}' in notes/")
+    if a == b:
+        raise SbError("a pair needs two different notes")
+    if not clean(reason):
+        raise SbError("unrelated needs a reason of one sentence")
+    v.append(UNRELATED, day.isoformat(), *sorted((a, b)), reason)
 
 
 def mark_verified(v: Vault, slugs, day: date) -> list:
@@ -219,7 +333,7 @@ def finish(v: Vault, summary: str, day: date) -> list:
     if start is None:
         raise SbError("no sleep is running (sb sleep begin)")
     inbox.expire_inbox(v, day, remembered(v, "shown"))
-    since = start.isoformat()
+    pairs, since = remembered(v, "dream"), start.isoformat()
     booked = [o for _, d, o in v.rows(inbox.DONE, 3) if d >= since and o != "wait"]
     use = Counter(k for d, c, k, _ in v.rows("usage.tsv", 4) if d >= since and c == "sleep")
     prom = sum(o.startswith("note:") for o in booked)
@@ -233,6 +347,10 @@ def finish(v: Vault, summary: str, day: date) -> list:
     (v.sb_dir / SNAP).write_text("".join(f"{s}\t{h}\n" for s, h in sorted(rows.items())), encoding="utf-8")
     (v.sb_dir / SLEEPING).unlink()
     rate, top = prom / len(booked) if booked else 0, v.cfg["lifecycle"]["max_promotion_rate"]
+    shown = {frozenset(m.get(s, s) for s in p.split("|")) for p in pairs}
+    linked = {p for p in shown if len(p) == 2 and all(s in notes for s in p) and any(b in notes[a].targets for a, b in permutations(p))}
+    nope = {p for p, ds in rejected(v).items() if any(d.isoformat() >= since for d in ds)} & (shown - linked)
     return ([f"warning: {prom} of {len(booked)} settled inbox lines were promoted ({rate:.0%}, limit {top:.0%}); capture less, or check the rank"]
             * (rate > top and len(booked) >= MIN_PROMOTION)
-            + [f"slept {day}: {len(booked)} inbox lines settled ({prom} promoted), {use['archive']} archived, {use['create']} created, {use['veto']} vetoes"])
+            + [f"slept {day}: {len(booked)} inbox lines settled ({prom} promoted), {use['archive']} archived, {use['create']} created, {use['veto']} vetoes"]
+            + [f"dream: {len(linked)} linked, {len(nope)} unrelated, {len(shown) - len(linked) - len(nope)} open of {len(shown)}"] * bool(shown))

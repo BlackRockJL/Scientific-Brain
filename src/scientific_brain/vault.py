@@ -13,12 +13,12 @@ WIKI = re.compile(r"\[\[([^\]\n]+)\]\]")
 KEY = re.compile(r"([a-z_][a-z0-9_]*):(?:\s+(.*))?$")
 LOCATIONS = ("notes", "archive")
 DEFAULTS = {"projects": [], "folder_map": {}, "source_roots": [], "bibtex": [],
-            "limits": {"title_words": 12, "body_words": 300, "links": 5, "min_coverage": 0.5},
+            "limits": {"title_words": 16, "body_words": 600, "links": 8, "min_coverage": 0.5},
             "activation": {"create": 1.0, "show": 1.0, "edit": 1.0, "veto": 0.5, "recall": 0.2,
-                           "h": 90, "h_decision": 180, "h_derivation": 180},
+                           "h": 90, "h_decision": 180, "h_derivation": 180, "h_unrelated": 90},
             "lifecycle": {"inbox_wait_days": 30, "sleep_days": 7, "sleep_gap": 1, "sleep_inbox": 30, "new_per_day": 3,
                           "sleep_budget": 40, "forget_budget": 10, "condense_pairs": 5, "condense_coverage": 0.6,
-                          "max_promotion_rate": 0.25},
+                          "max_promotion_rate": 0.25, "dream_pairs": 5},
             "index": {"skip_sections": []},
             "update": {"auto": True}}
 RATES = {"min_coverage", "condense_coverage", "max_promotion_rate"}  # shares; the other limits and lifecycle values are counts

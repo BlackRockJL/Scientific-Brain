@@ -94,6 +94,19 @@ The plan is computed without a model; the agent only judges.
   when the snapshot holds its content hash (ignoring `verified:`), or, never snapshotted, when its `verified`
   is not older than `updated`. Edited notes come before never-checked ones. Then the ten most active notes with
   the oldest `verified`.
+- **Dream:** up to `dream_pairs` (5) pairs of notes that are not linked yet, outside the budget so that they are
+  never crowded out. Seeds are the notes new or changed since the last sleep, then the most active ones (at most
+  20); for each, a search with its eight rarest words gives related notes, which are cut by the checks for
+  existing links, condense pairs and near-duplicates (coverage), the link limit and locked pairs, and by one
+  appearance per note and sleep. Two pairs across projects, two within one (one kind fills up for the other), and
+  one far pair: a concept or derivation among the fifty most active against a finding or question of another
+  project sharing at most one key word of title and cue, picked by a daily hash. The agent judges each pair and
+  logs a rejection with `sleep unrelated`; the pair is locked while the rejections, weighted like uses in the
+  activation formula, stay above the threshold of `h_unrelated` (90 days). One rejection thus locks for 90 days,
+  a second one after that for much longer. The phase does not make a sleep due, and `sleep done` counts linked,
+  rejected and open pairs. Sleep recombines what is known; without links a note stays a filing-cabinet entry. The
+  candidates are cheap and deterministic, the judgement is expensive, hence few pairs, and forgetting rejections
+  with the same power function keeps the memory of them as light as the memory of notes.
 - **Budget:** at most 40 items, filled in the order consolidate, forget (10), condense (5 pairs), verify
   (unchecked), the rest of forget and condense, verify (active); what does not fit is reported as deferred. The
   caps only bind while other work waits, so a wave of forget candidates or a large unverified stock cannot
@@ -124,4 +137,7 @@ sessions; its own tests found that age decay and sleep consolidation did not imp
 therefore aims at a small store and a clean search space, and its effect should be measured from the usage
 log. CortexGraph promotes short-term entries into Markdown after repeated use, mnemos updates traces on
 retrieval, pensyve-core implements ACT-R activation, and basic-memory and the LLM-wiki pattern maintain
-Markdown knowledge bases without forgetting.
+Markdown knowledge bases without forgetting. Of the systems we looked at (November 2026), none proposes links
+between stored notes pair by pair in a periodic pass with a model judging each pair, deliberately distant pairs
+and a decaying memory of rejected pairs; A-MEM links only at insertion time, and SCM draws edges by random walks
+without a judgement per pair.
