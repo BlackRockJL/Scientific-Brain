@@ -308,6 +308,28 @@ def test_sleep_baseline_accepts_current_notes_without_touching_verified(tmp_path
     assert code == 2 and "a sleep is running" in err
 
 
+def test_baseline_seed_lets_an_import_fade_one_by_one(tmp_path):
+    v = make_vault(tmp_path)
+    (v / ".sb" / "usage.tsv").unlink(missing_ok=True)
+    for i, typ in enumerate(("finding", "decision", "concept", "finding", "question")):
+        d = f"2024-0{i + 1}-01"
+        add_note(v, f"old-{i}", type=typ, extra={"created": d, "updated": d},
+                 body="\n## Rejected\n\n- none\n" if typ == "decision" else "\n## Depends on\n\n- none\n" if typ == "question" else "")
+    vv = Vault(v)
+    assert len(usage.forget_candidates(vv, TODAY)) >= 5  # an import without use is due to be forgotten at once
+    code, out, _ = sb(v, "sleep", "baseline", "--seed", "365")
+    n = sum(1 for _ in (v / "notes").rglob("*.md"))
+    assert code == 0 and f"seeded {n} notes without use" in out
+    fades = {}
+    for dt in range(0, 400):
+        for s, *_ in usage.forget_candidates(vv, date.fromordinal(TODAY.toordinal() + dt)):
+            fades.setdefault(s, dt)
+    assert len(fades) == n and min(fades.values()) >= 30 and max(fades.values()) <= 366
+    assert [fades[f"old-{i}"] for i in range(5)] == sorted(fades[f"old-{i}"] for i in range(5))  # oldest update first
+    assert sb(v, "sleep", "baseline", "--seed", "365")[1].count("seeded 0 notes") == 1  # a rerun seeds nothing twice
+    assert sb(v, "sleep", "baseline", "--seed", "20")[0] == 2
+
+
 def test_sleep_comes_due_when_a_full_plan_of_work_waits(tmp_path):
     v = make_vault(tmp_path)
     (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 12\n")

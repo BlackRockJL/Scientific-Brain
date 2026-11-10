@@ -17,6 +17,7 @@ HOT = 20  # verify (b) looks at the HOT most active notes and takes the oldest v
 UNRELATED = "unrelated.tsv"  # .sb/ file: date, slug, slug, reason of every pair judged unrelated
 SEEDS, FAR_POOL = 20, 50  # dream: notes that seed the near pairs; most active concepts and derivations for the far pair
 MIN_PROMOTION = 10  # the promotion warning needs at least this many settled lines to mean anything
+SEED_MIN = 30  # `baseline --seed`: days before the first seeded note can fade
 
 
 def started(v: Vault) -> date | None:
@@ -73,16 +74,27 @@ def snapshot(v: Vault) -> dict:
     return {m.get(s, s): h for s, h in v.rows(SNAP, 2)}
 
 
-def baseline(v: Vault) -> int:
+def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
     """Accept every note in notes/ as checked in its current form, e.g. after an import; `verified` stays untouched.
-    Returns the number of notes that were unchecked before."""
+    With seed_days, notes without any use get one start use today, weighted so that they fade one by one between
+    SEED_MIN and seed_days days from now, the least recently updated first. Returns (unchecked before, seeded)."""
     if started(v) is not None:
         raise SbError("a sleep is running; finish it first (sb sleep done)")
+    if seed_days is not None and seed_days <= SEED_MIN:
+        raise SbError(f"--seed needs more than {SEED_MIN} days")
     notes, snap = load(v), snapshot(v)
     new = sum(not checked(n, snap) for n in notes.values())
     rows = snap | {s: digest(n) for s, n in notes.items()}  # archived notes keep their row
     (v.sb_dir / SNAP).write_text("".join(f"{s}\t{h}\n" for s, h in sorted(rows.items())), encoding="utf-8")
-    return new
+    if seed_days is None:
+        return new, 0
+    used = usage.events(v)
+    bare = sorted((str(n.get("updated") or n.get("created") or ""), s) for s, n in notes.items() if s not in used)
+    for i, (_, s) in enumerate(bare):
+        t = SEED_MIN + (seed_days - SEED_MIN) * (i / (len(bare) - 1) if len(bare) > 1 else 1)
+        # one use of weight w fades after T days when w^2 (H + 1) = T + 1
+        v.append(usage.SEEDS, day.isoformat(), s, f"{((t + 1) / (usage.horizon(v, notes[s].get('type')) + 1)) ** 0.5:.6f}")
+    return new, len(bare)
 
 
 def backlog(v: Vault, day: date) -> dict:

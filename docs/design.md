@@ -122,7 +122,12 @@ The plan is computed without a model; the agent only judges.
   filter has become too loose.
 - `sleep baseline` accepts every note in its current form, e.g. after importing an existing collection: it
   writes the hashes of all notes to the snapshot, so verify lists only what changes afterwards. `verified` is
-  left alone and still tells which notes were never checked; no sleep is logged.
+  left alone and still tells which notes were never checked; no sleep is logged. With `--seed DAYS` it also
+  gives every note without use one start use today in `.sb/seeds.tsv`. Without it, an imported note counts only
+  its `created` date and falls below the threshold at once once it is older than H. The weight
+  w = √((T + 1)/(H + 1)) makes a note fade after T days, and T runs from 30 to DAYS, the least recently updated
+  note first. So an import of 1000 notes with `--seed 365` brings about three forget candidates a day instead
+  of all of them in the first sleep.
 
 ## Rules and integration
 

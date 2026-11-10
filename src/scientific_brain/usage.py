@@ -8,6 +8,7 @@ from datetime import date
 from .vault import SbError, Vault
 
 EPS = 1e-12
+SEEDS = "seeds.tsv"  # .sb/ file: date, slug, weight of the start use `sleep baseline --seed` gives imported notes
 
 
 def today() -> date:
@@ -55,7 +56,19 @@ def events(v: Vault) -> dict:
             continue
         days = out.setdefault(m.get(slug, slug), {})
         days[day] = max(days.get(day, 0.0), w[kind])
+    for d, slug, x in v.rows(SEEDS, 3):
+        try:
+            day, wt = date.fromisoformat(d), float(x)
+        except ValueError:
+            continue
+        days = out.setdefault(m.get(slug, slug), {})
+        days[day] = max(days.get(day, 0.0), wt)
     return out
+
+
+def horizon(v: Vault, typ: str) -> float:
+    a = v.cfg["activation"]
+    return a.get("h_" + typ, a["h"])
 
 
 def activation(days: dict, today: date) -> float:
@@ -66,8 +79,7 @@ def activation(days: dict, today: date) -> float:
 
 def threshold(v: Vault, typ: str) -> float:
     """ln((H + 1)^-0.5): the value of one full use H days ago."""
-    a = v.cfg["activation"]
-    return math.log((a.get("h_" + typ, a["h"]) + 1) ** -0.5)
+    return math.log((horizon(v, typ) + 1) ** -0.5)
 
 
 def scores(v: Vault, today: date) -> list:

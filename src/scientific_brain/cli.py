@@ -264,8 +264,10 @@ def cmd_sleep(a):
             print(line)
         return
     if a.sub == "baseline":
-        n = sleep.baseline(find_vault())
+        n, seeded = sleep.baseline(find_vault(), day, a.seed)
         print(f"baseline: all notes count as checked in their current form ({n} were unchecked); verified is unchanged")
+        if a.seed is not None:
+            print(f"seeded {seeded} notes without use; they fade one by one within {a.seed} days")
         return
     v, idx = _vault_index()
     if a.sub == "plan":
@@ -408,7 +410,8 @@ def main(argv=None) -> int:
     q.add_argument("reason")
     sp.add_parser("verified", help="mark notes as checked").add_argument("slugs", nargs="+")
     sp.add_parser("done", help="end the sleep").add_argument("summary")
-    sp.add_parser("baseline", help="accept all notes as checked in their current form, e.g. after an import")
+    sp.add_parser("baseline", help="accept all notes as checked in their current form, e.g. after an import").add_argument(
+        "--seed", type=int, metavar="DAYS", help="give notes without use a start use, so they fade one by one within DAYS")
     cmd("stats", cmd_stats, "counts, activation, inbox, last sleep")
     cmd("rules", cmd_rules, "print the agent rules")
     cmd("hook", cmd_hook, "entry point for Claude Code hooks").add_argument("event", choices=("after-edit", "session-start"))

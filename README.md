@@ -69,7 +69,8 @@ sb recall ftcs stability
 next sleep promotes, keeps or drops them.
 
 After importing an existing collection of notes, `sb sleep baseline` accepts them as they are, so the first
-sleeps verify only what changes from then on.
+sleeps verify only what changes from then on. Add `--seed 365` when the import brings no usage history: every
+older note would otherwise be a forget candidate at once, and the seed lets them fade one by one over a year.
 
 ## Dreaming
 
