@@ -47,14 +47,14 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 # [index]
 # skip_sections = []                         # headings whose sections stay out of the full-text search
 # [update]
-# auto = true                                # each sleep updates the CLI and the plugin first (SB_NO_UPDATE=1 also stops it)
+# auto = true                                # each sleep updates the CLI and the plugin to the latest release tag (false or SB_NO_UPDATE=1 stops it)
 """
 
 
 def _sync(v, idx, full=False):
-    """Refresh the index; notes found changed on disk count as edited (usage log)."""
+    """Refresh the index; notes found changed on disk count as edited (usage log, caller sync)."""
     for slug in idx.refresh(full):
-        usage.log(v, "edit", slug)
+        usage.log(v, "edit", slug, caller="sync")
     return idx
 
 
@@ -82,15 +82,15 @@ def cmd_recall(a):
     terms = [w for t in a.terms for w in t.split()]
     if match_query(terms)[0] is None:
         raise SbError("no usable search terms")
-    locs = ("inbox",) if a.inbox else LOCATIONS if a.archive else ("notes",)
+    locs = ("inbox", "expired") if a.inbox else LOCATIONS if a.archive else ("notes",)
     rows, ignored = idx.search(terms, locs, a.project, a.n)
     if ignored:
         print("ignored (not searchable): " + ", ".join(ignored))
     if not rows:
         print("no match")
     for i, (slug, proj, typ, loc, title, gist, cue) in enumerate(rows):
-        if loc == "inbox":  # title holds the capture date, cue the source
-            print(f"{slug}  [inbox, {proj}, {title}]\n  {gist}" + (f"\n  source: {cue}" if cue else ""))
+        if loc in ("inbox", "expired"):  # title holds the capture date, cue the source
+            print(f"{slug}  [inbox{' expired' * (loc == 'expired')}, {proj}, {title}]\n  {gist}" + (f"\n  source: {cue}" if cue else ""))
             continue
         arch = v.read(v.find(slug)) if loc == "archive" else None
         print(("WRONG: " if arch and arch.get("archived_why") == "wrong" else "") + f"{slug}  [{typ}, {proj}]"
@@ -100,7 +100,7 @@ def cmd_recall(a):
             usage.log(v, "recall", slug)
     if not a.archive and not a.inbox and (n := idx.count(terms, ("archive",), a.project)):
         print(f"+{n} archived matches (use --archive)")
-    if not a.inbox and (n := idx.count(terms, ("inbox",), a.project)):
+    if not a.inbox and (n := idx.count(terms, ("inbox", "expired"), a.project)):
         print(f"+{n} inbox matches (use --inbox)")
     if (due := usage.sleep_due(v, idx.n_notes(), idx.n_inbox(), usage.today())):
         print(due)
@@ -203,6 +203,13 @@ def cmd_inbox(a):
         inbox.resolve(v, a.id, outcome, day)
         print(f"{a.id}: {outcome}")
         return
+    if a.expired:
+        rows = [r for r in inbox.expired(v) if not a.project or r[2] == a.project]
+        for id, _, proj, src, text in rows:
+            print(f"{id}  expired {inbox.done(v)[id][0]}  {proj}  {text}" + (f"  ({src})" if src else ""))
+        if not rows:
+            print("(no expired inbox lines)")
+        return
     rows = [(r, inbox.age(r, day)) for r in inbox.open_lines(v) if not a.project or r[2] == a.project]
     rows = [x for x in rows if not a.due or x[1] > v.cfg["lifecycle"]["inbox_wait_days"]]
     for (id, _, proj, src, text), n in rows:
@@ -239,7 +246,7 @@ def cmd_stats(a):
     ages = [inbox.age(r, day) for r in op]
     print(f"inbox: {len(op)} open" + (f", oldest {max(ages)} days" if ages else ""))
     p, t = inbox.promotion(v)
-    print("promotion rate: " + (f"{p / t:.0%} ({p} of {t} settled)" if t else "n/a"))
+    print("promotion rate: " + (f"{p / t:.0%} ({p} of {t} settled)" if t else "n/a") + (f", {x} expired" if (x := len(inbox.expired(v))) else ""))
     sc = usage.scores(v, day)
     act = [x[3] for x in sc]
     print("activation A: " + (f"min {min(act):.2f}, median {median(act):.2f}, max {max(act):.2f}" if act else "n/a"))
@@ -251,6 +258,8 @@ def cmd_stats(a):
           + f"), about {-(-sum(work.values()) // budget)} sleeps of {budget}")
     last = usage.last_sleep(v)
     print("last sleep: " + (f"{last} ({(day - last).days} days ago)" if last else "never"))
+    if sleep.stale(v, day):
+        print(f"warning: the sleep marker from {sleep.started(v)} was left behind (more than a day old); 'sb sleep begin' replaces it")
     if (due := usage.sleep_due(v, where["notes"], len(op), day, work)):
         print(due)
 
@@ -264,7 +273,8 @@ def cmd_sleep(a):
             print(line)
         return
     if a.sub == "baseline":
-        n, seeded = sleep.baseline(find_vault(), day, a.seed)
+        v, _ = _vault_index()  # edits the sync finds belong before the seed, not after it
+        n, seeded = sleep.baseline(v, day, a.seed)
         print(f"baseline: all notes count as checked in their current form ({n} were unchecked); verified is unchanged")
         if a.seed is not None:
             print(f"seeded {seeded} notes without use; they fade one by one within {a.seed} days")
@@ -362,7 +372,7 @@ def main(argv=None) -> int:
     sp.add_argument("-n", type=count, default=5)
     sp.add_argument("-p", "--project")
     sp.add_argument("--archive", action="store_true", help="include archived notes")
-    sp.add_argument("--inbox", action="store_true", help="search only the open inbox lines")
+    sp.add_argument("--inbox", action="store_true", help="search only the inbox lines (open, and expired ones marked)")
     cmd("show", cmd_show, "full note and backlinks").add_argument("slug")
     cmd("map", cmd_map, "titles by project and type").add_argument("project", nargs="?")
     sp = cmd("new", cmd_new, "create a note skeleton")
@@ -382,6 +392,7 @@ def main(argv=None) -> int:
     sp.add_argument("-s", "--source", default="")
     sp = cmd("inbox", cmd_inbox, "list open inbox lines, or settle one with 'resolve'")
     sp.add_argument("--due", action="store_true", help="only lines older than inbox_wait_days")
+    sp.add_argument("--expired", action="store_true", help="list the lines that expired at a sleep instead of the open ones")
     sp.add_argument("-p", "--project")
     sp = sp.add_subparsers(dest="sub").add_parser("resolve", help="settle one line")
     sp.add_argument("id")

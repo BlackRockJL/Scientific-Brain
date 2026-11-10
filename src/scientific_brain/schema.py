@@ -143,8 +143,9 @@ def check(v: Vault, only=None):
                 err("ref", f"unknown citation key '{ref}' (not in the BibTeX files, not a DOI)")
             if refs.setdefault(ref, rel) != rel:
                 err("ref", f"ref '{ref}' already used by {refs[ref]}")
-        if (i := next((i for i, x in enumerate(n.raw.split("\n")) if TODO.search(x.strip())), None)) is not None:
-            add("error", f"{rel}:{i + 1}", "unfilled TODO placeholder")
+        for i, x in enumerate(n.raw.split("\n")):
+            if TODO.search(x.strip()):
+                add("error", f"{rel}:{i + 1}", "unfilled TODO placeholder")
     seen: dict = {}
 
     def dfs(u, path):  # depth-first search for a superseded_by cycle

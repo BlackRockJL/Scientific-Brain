@@ -66,13 +66,13 @@ not hold instructions about how you should work; those belong in your own memory
 When sb says "sleep due" ({sleep_days} days since the last sleep, more than {sleep_inbox} open inbox lines, or
 {sleep_budget} items waiting), the main session starts the sleep agent. It works in this order:
 
-1. `sb sleep begin`. From now on your calls are logged as sleep and do not count as use. An unfinished sleep
-   blocks a second one (`--force` replaces it).
+1. `sb sleep begin`. From now on your calls are logged as sleep and do not count as use, except on notes the plan
+   does not name. An unfinished sleep blocks a second one (`--force` replaces it).
 2. `sb sleep plan` prints five lists, each entry with its slug or inbox id. Work them in order. Every note you
    change must still pass `sb check`.
    - Consolidate: settle every open inbox line with `sb inbox resolve`. Extend a similar note, or create one
      only with rank, then `--note <slug>`; otherwise `--drop` or `--wait` (at most {inbox_wait_days} days; due lines are
-     marked DUE and expire at `sleep done`). Lines captured twice are promoted.
+     marked DUE and expire at `sleep done`, listed by `sb inbox --expired`). Lines captured twice are promoted.
    - Condense: for each near-duplicate pair merge into one note and archive the other with `--why superseded
      --superseded-by`, or keep both with sharper titles and cues.
    - Forget: archive each candidate with `--why faded`, or keep it with `sb sleep veto <slug> "one sentence"`.
@@ -83,13 +83,13 @@ When sb says "sleep due" ({sleep_days} days since the last sleep, more than {sle
      list; what you did not verify comes back in the next plan. An answered question is archived with the
      answering note as successor.
    - Dream: link a pair (with a why) only if one changes how the other is read, else `sb sleep unrelated`.
-3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed, logs the sleep and prints one
-   line. It warns when more than {max_promotion_rate} of at least ten settled inbox lines were promoted.
+3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed (not your `--wait` ones), logs the
+   sleep and prints one line, expired lines apart (not settled). It warns when more than {max_promotion_rate} of at least ten
+   settled inbox lines were promoted.
 
 The plan touches at most {sleep_budget} notes and inbox lines: inbox lines first, then up to {forget_budget} forget
 candidates and {condense_pairs} near-duplicate pairs, then verify, then further candidates and pairs. It reports what
-did not fit as `deferred`; do not work beyond it. A numeric check that needs more judgement may go to one stronger subagent. The report is
-the one line of `sleep done`.
+did not fit as `deferred`; do not work beyond it. A numeric check that needs more judgement may go to one stronger subagent.
 
 ## Never
 
@@ -97,5 +97,4 @@ the one line of `sleep done`.
 - Edit the index; it is a cache and `sb check --rebuild` rebuilds it.
 - Edit `.sb/` files by hand; they are append-only logs that `sb` writes.
 
-`sb stats` shows counts, open inbox lines, promotion rate, activation spread, forgetting candidates, the work
-waiting for a sleep and the last sleep.
+`sb stats` shows counts and sleep state.

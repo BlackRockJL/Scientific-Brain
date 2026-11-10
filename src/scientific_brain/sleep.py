@@ -12,7 +12,7 @@ from .index import fold, prepare
 from .links import fm_end
 from .vault import SbError, Vault, clean
 
-SLEEPING, SNAP = "sleeping", "snapshot.tsv"  # .sb/ files: running sleep (start date, then shown/verified ids), slug+hash of checked notes
+SLEEPING, SNAP = "sleeping", "snapshot.tsv"  # .sb/ files: running sleep (start date, then shown/planned/verified ids), slug+hash of checked notes
 HOT = 20  # verify (b) looks at the HOT most active notes and takes the oldest verified of them
 UNRELATED = "unrelated.tsv"  # .sb/ file: date, slug, slug, reason of every pair judged unrelated
 SEEDS, FAR_POOL = 20, 50  # dream: notes that seed the near pairs; most active concepts and derivations for the far pair
@@ -30,15 +30,45 @@ def started(v: Vault) -> date | None:
         return date.min
 
 
+def stale(v: Vault, day: date) -> bool:
+    """A marker more than a day old was left behind: it blocks nothing and tags nothing as sleep."""
+    return (start := started(v)) is not None and (day - start).days > 1
+
+
 def begin(v: Vault, day: date, force=False) -> str:
     start, msg = started(v), f"sleep started {day}"
     if start is not None:
-        if not force and (day - start).days <= 1:
+        if not force and not stale(v, day):
             raise SbError(f"a sleep has been running since {start}; finish it with 'sleep done' or use --force")
+        release(v, start)
         msg += f" (replaced the sleep from {start})"
     v.sb_dir.mkdir(exist_ok=True)
     (v.sb_dir / SLEEPING).write_text(day.isoformat() + "\n", encoding="utf-8")
+    v.append("usage.tsv", day.isoformat(), "sleep", "begin", "-")  # the sleep's usage starts after this row
     return msg
+
+
+def pending(v: Vault, start: date) -> list:
+    """(row number, row) of the usage logged as sleep since the running sleep began (its begin row, else its date)."""
+    rows = v.rows("usage.tsv", 4)
+    first = max((i for i, r in enumerate(rows) if r[1:3] == ["sleep", "begin"] and r[0] == start.isoformat()), default=None)
+    return [(i, r) for i, r in enumerate(rows)
+            if r[1] == "sleep" and (i > first if first is not None else r[0] >= start.isoformat())]
+
+
+def release(v: Vault, start: date):
+    """Use logged during the sleep counts again for notes the plan did not list (the sleeper read only those)."""
+    if start == date.min:
+        return
+    m, cur = usage.renames(v), usage.renamer(v)
+    held = {m.get(s, s) for s in remembered(v, "planned") | remembered(v, "verified")}
+    for i, (d, _, kind, slug) in pending(v, start):
+        try:
+            day = date.fromisoformat(d)
+        except ValueError:
+            continue
+        if kind in ("show", "recall", "edit") and (now := cur(slug, i, day)) not in held:  # veto counts anyway, create is dated
+            v.append("usage.tsv", d, "work", kind, now)
 
 
 def digest(n) -> str:
@@ -76,9 +106,9 @@ def snapshot(v: Vault) -> dict:
 
 def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
     """Accept every note in notes/ as checked in its current form, e.g. after an import; `verified` stays untouched.
-    With seed_days, notes without any use get one start use today, weighted so that they fade one by one between
+    With seed_days, notes without any use (index-found edits do not count) get one start use today, weighted so that they fade one by one between
     SEED_MIN and seed_days days from now, the least recently updated first. Returns (unchecked before, seeded)."""
-    if started(v) is not None:
+    if started(v) is not None and not stale(v, day):
         raise SbError("a sleep is running; finish it first (sb sleep done)")
     if seed_days is not None and seed_days <= SEED_MIN:
         raise SbError(f"--seed needs more than {SEED_MIN} days")
@@ -88,7 +118,7 @@ def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
     (v.sb_dir / SNAP).write_text("".join(f"{s}\t{h}\n" for s, h in sorted(rows.items())), encoding="utf-8")
     if seed_days is None:
         return new, 0
-    used = usage.events(v)
+    used = usage.events(v, ignore_sync=True)  # edits only the index found are no use
     bare = sorted((str(n.get("updated") or n.get("created") or ""), s) for s, n in notes.items() if s not in used)
     for i, (_, s) in enumerate(bare):
         t = SEED_MIN + (seed_days - SEED_MIN) * (i / (len(bare) - 1) if len(bare) > 1 else 1)
@@ -132,12 +162,12 @@ def plan(v: Vault, idx, day: date) -> str:
     def near(ws, skip, n, cover=None, locs=("notes",)) -> list:
         return [r for r in idx.search(ws, locs, None, n + 1, cover)[0] if r[0] != skip][:n] if ws else []
 
-    touched, deferred = set(), [0]
+    touched, deferred, listed = set(), set(), set()  # listed: notes the plan names, neighbours included
 
     def take(*ids) -> bool:
-        """Count the items against the budget; refuse (and count as deferred) when it would overflow."""
+        """Count the items against the budget; refuse (and note as deferred) when it would overflow."""
         if len(touched | set(ids)) > lc["sleep_budget"]:
-            deferred[0] += 1
+            deferred.update(ids)
             return False
         touched.update(ids)
         return True
@@ -188,13 +218,15 @@ def plan(v: Vault, idx, day: date) -> str:
 
     dream = dream_pairs(v, notes, sc, day, found, keys, near, cover, fresh)
     remember(v, "dream", (f"{a}|{b}" for a, b, _ in dream))
-    out = [f"# Sleep plan {day}", f"touched: {len(touched)} of {lc['sleep_budget']} (notes and inbox lines), deferred: {deferred[0]}",
+    out = [f"# Sleep plan {day}", f"touched: {len(touched)} of {lc['sleep_budget']} (notes and inbox lines), deferred: {len(deferred - touched)}",
            "", f"## 1. Consolidate: {len(lines)} open inbox lines",
            "Settle each with `sb inbox resolve <id> --note <slug>` (extend or create the note first), `--drop` or `--wait`."]
     for id, d, proj, src, text in lines:
         n = inbox.age((id, d), day)
         out.append(f"- `{id}` {n}d {proj}" + (" DUE" if n > lc["inbox_wait_days"] else "") + f": {text}" + (f" (source: {src})" if src else ""))
-        out += [f"  similar: {r[0]} ({r[4]})" for r in near(keys(text, 1), "", 3)]
+        sim = near(keys(text, 1), "", 3)
+        listed.update(r[0] for r in sim)
+        out += [f"  similar: {r[0]} ({r[4]})" for r in sim]
     out += [f"- captured twice, promote: `{min(p)}` ~ `{max(p)}`" for p in sorted(pairs, key=sorted)]
     out += ["", f"## 2. Condense: {len(dup)} near-duplicate pairs", "Merge into one note (archive the other as superseded) or keep apart with sharper titles."]
     for p in dup:
@@ -209,7 +241,9 @@ def plan(v: Vault, idx, day: date) -> str:
     for s in verify_a:
         n = notes[s]
         out.append(f"- {s} ({'changed' if s in snap else 'new'}) [{n.get('type')}, {n.folder}] sources: " + (", ".join(n.get("sources", [])) or "none"))
-        out.append("  compare with: " + ("; ".join(f"{r[0]} ({r[4]})" for r in near(keys(f"{n.get('title')} {n.gist}", 2, 8), s, 3, 0.2)) or "none"))
+        comp = near(keys(f"{n.get('title')} {n.gist}", 2, 8), s, 3, 0.2)
+        listed.update(r[0] for r in comp)
+        out.append("  compare with: " + ("; ".join(f"{r[0]} ({r[4]})" for r in comp) or "none"))
     out += [f"- {s} (A={a:.2f}, verified {notes[s].get('verified') or 'never'})" for s, _, _, a, _ in verify_b]
     out += ["", f"## 5. Dream: {len(dream)} candidate pairs",
             "For each pair read both notes. Link them only when one changes how the other is read (a shared mechanism, quantity, method "
@@ -219,6 +253,7 @@ def plan(v: Vault, idx, day: date) -> str:
     for a, b, kind in dream:
         out.append(f"- {a} ~ {b} ({kind}; {notes[a].folder}, {notes[b].folder})")
         out += [f"  {s} [{notes[s].get('type')}]: {sentence(notes[s].gist)}" for s in (a, b)]
+    remember(v, "planned", sorted(listed | {t for t in touched if not t.startswith("inbox:")} | {s for a, b, _ in dream for s in (a, b)}))
     return "\n".join(out) + "\n"
 
 
@@ -344,12 +379,13 @@ def finish(v: Vault, summary: str, day: date) -> list:
     start = started(v)
     if start is None:
         raise SbError("no sleep is running (sb sleep begin)")
-    inbox.expire_inbox(v, day, remembered(v, "shown"))
-    pairs, since = remembered(v, "dream"), start.isoformat()
-    booked = [o for _, d, o in v.rows(inbox.DONE, 3) if d >= since and o != "wait"]
-    use = Counter(k for d, c, k, _ in v.rows("usage.tsv", 4) if d >= since and c == "sleep")
+    expired = inbox.expire_inbox(v, day, remembered(v, "shown"), start)
+    pairs, since, pend = remembered(v, "dream"), start.isoformat(), pending(v, start)
+    booked = [o for _, d, o in v.rows(inbox.DONE, 3) if d >= since and o not in ("wait", "expired")]
+    use = Counter(r[2] for _, r in pend)
     prom = sum(o.startswith("note:") for o in booked)
-    v.append("sleep.tsv", day, len(booked), prom, use["archive"], use["create"], use["veto"], summary)
+    v.append("sleep.tsv", day, len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary)
+    release(v, start)
     m, notes = usage.renames(v), load(v)
     snap, done = snapshot(v), {m.get(s, s) for s in remembered(v, "verified")}
     rows = dict(snap)  # archived notes keep their row, so a restored note is compared, not trusted
@@ -362,7 +398,10 @@ def finish(v: Vault, summary: str, day: date) -> list:
     shown = {frozenset(m.get(s, s) for s in p.split("|")) for p in pairs}
     linked = {p for p in shown if len(p) == 2 and all(s in notes for s in p) and any(b in notes[a].targets for a, b in permutations(p))}
     nope = {p for p, ds in rejected(v).items() if any(d.isoformat() >= since for d in ds)} & (shown - linked)
+    text = {r[0]: r[4] for r in inbox.lines(v)}
     return ([f"warning: {prom} of {len(booked)} settled inbox lines were promoted ({rate:.0%}, limit {top:.0%}); capture less, or check the rank"]
             * (rate > top and len(booked) >= MIN_PROMOTION)
-            + [f"slept {day}: {len(booked)} inbox lines settled ({prom} promoted), {use['archive']} archived, {use['create']} created, {use['veto']} vetoes"]
+            + [f"slept {day}: {len(booked)} inbox lines settled ({prom} promoted), {len(expired)} expired, {use['archive']} archived, "
+               f"{use['create']} created, {use['veto']} vetoes"]
+            + [f"expired {i}: {sentence(text.get(i, ''), 80)}" for i in expired]
             + [f"dream: {len(linked)} linked, {len(nope)} unrelated, {len(shown) - len(linked) - len(nope)} open of {len(shown)}"] * bool(shown))

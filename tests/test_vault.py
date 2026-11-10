@@ -94,3 +94,23 @@ def test_counts_must_be_whole_numbers_and_skip_sections_strings(tmp_path):
     v = make_vault(tmp_path / "ok")
     (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[index]\nskip_sections = [\"Old\"]\n[lifecycle]\ncondense_coverage = 0.7\n")
     assert Vault(v).cfg["index"]["skip_sections"] == ["Old"]
+
+
+def test_self_update_is_on_by_default(tmp_path):
+    from scientific_brain.vault import DEFAULTS, Vault
+    assert DEFAULTS["update"] == {"auto": True} and Vault(make_vault(tmp_path)).cfg["update"] == {"auto": True}
+
+
+def test_toml_reader_falls_back_to_tomli_on_python_310(monkeypatch):
+    import importlib
+    import sys
+    import types
+    import scientific_brain.vault as vm
+    fake = types.ModuleType("tomli")
+    monkeypatch.setitem(sys.modules, "tomli", fake)
+    monkeypatch.setitem(sys.modules, "tomllib", None)  # import raises ModuleNotFoundError
+    try:
+        assert importlib.reload(vm).tomllib is fake
+    finally:
+        monkeypatch.undo()
+        importlib.reload(vm)

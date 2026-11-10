@@ -49,16 +49,28 @@ def rename(v: Vault, old: str, new: str):
         raise SbError(f"'{new}' is not a valid slug (lower-case letters, digits, hyphens)")
     if v.find(new):
         raise SbError(f"slug '{new}' already exists at {v.find(new)}")
-    changed = []
+    plan = {}  # rel -> (old text, new text); everything is computed before the first write
     for loc in LOCATIONS:
         for rel in v.scan(loc):
-            p = v.root / rel
-            text = p.read_text(encoding="utf-8")
-            if (t2 := rewrite(text, old, new)) != text:
-                p.write_text(t2, encoding="utf-8")
-                changed.append(rel)
+            try:
+                text = (v.root / rel).read_text(encoding="utf-8")
+                t2 = rewrite(text, old, new)
+            except (UnicodeDecodeError, SbError) as e:
+                raise SbError(f"{rel}: {e}; nothing was renamed") from e
+            if t2 != text:
+                plan[rel] = (text, t2)
     dst = src.rsplit("/", 1)[0] + f"/{new}.md"
-    (v.root / src).rename(v.root / dst)
+    done = []
+    try:
+        for rel, (_, t2) in plan.items():
+            done.append(rel)
+            (v.root / rel).write_text(t2, encoding="utf-8")
+        (v.root / src).rename(v.root / dst)
+    except OSError as e:
+        for rel in done:  # put the old texts back
+            (v.root / rel).write_text(plan[rel][0], encoding="utf-8")
+        raise SbError(f"rename failed ({e}); the notes were left as they were") from e
+    changed = list(plan)
     return [dst, src] + [c for c in changed if c != src]
 
 

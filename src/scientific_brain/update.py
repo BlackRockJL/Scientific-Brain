@@ -1,13 +1,15 @@
-"""Self-update at the start of a sleep: the CLI (git install) and the Claude Code plugin; never raises."""
+"""Opt-in self-update at the start of a sleep: the CLI (git install, newest release tag) and the Claude Code plugin; never raises."""
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from importlib import metadata
 
+from . import __version__
 from .vault import Vault
 
 REPO = "scientific-brain"  # distribution, marketplace and plugin name
@@ -26,35 +28,64 @@ def _direct_url() -> dict | None:
     return json.loads(raw) if raw else None
 
 
+TAG = re.compile(r"refs/tags/v(\d+)\.(\d+)\.(\d+)(?:\^\{\})?\Z")  # release tags vX.Y.Z; ^{} marks an annotated tag's target
+
+
+RELEASE = re.compile(r"v\d+\.\d+\.\d+\Z")  # a pin of this form follows the releases
+
+
+def _installed() -> tuple[int, ...] | None:
+    """Installed version as a tuple; None if unknown."""
+    try:
+        raw = metadata.version(REPO)
+    except metadata.PackageNotFoundError:
+        raw = __version__
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", raw)
+    return tuple(map(int, m.groups())) if m else None
+
+
+def _latest(ls_remote: str) -> tuple[int, ...] | None:
+    """Highest vX.Y.Z tag in `git ls-remote --tags` output; None if there is none."""
+    found = [tuple(map(int, m.groups())) for ln in ls_remote.splitlines()
+             if len(f := ln.split()) == 2 and (m := TAG.match(f[1]))]
+    return max(found, default=None)
+
+
 def _cli(note: list[str]):
     info = _direct_url()
     if not info or info.get("dir_info", {}).get("editable") or "vcs_info" not in info:
         return  # developer install or not from git: nothing to do
-    url, have = info["url"], info["vcs_info"].get("commit_id", "")
+    url, pinned = info["url"], info["vcs_info"].get("requested_revision")
     try:
-        r = _run(["git", "ls-remote", url, "HEAD"], 20)
+        r = _run(["git", "ls-remote", "--tags", url], 20)
     except subprocess.TimeoutExpired:
         note.append("sb update check timed out (the sleep goes on)")
         return
-    parts = r.stdout.split()
-    if r.returncode or not parts:
+    if r.returncode:
         note.append("sb update check failed: remote not reachable (the sleep goes on)")
         return
-    new = parts[0]
-    if new == have:
+    latest, have = _latest(r.stdout), _installed()
+    if latest is None:
+        note.append("sb not updated: no release tag vX.Y.Z found on the remote")
         return
-    pipx = shutil.which("pipx") and "pipx" in sys.prefix and "venvs" in sys.prefix
-    if not pipx:
-        note.append(f"a newer sb is available; update with 'pipx reinstall {REPO}' "
-                    f"or 'pip install --upgrade --force-reinstall {url}'")
+    if have is None or latest <= have:
+        return
+    tag = "v" + ".".join(map(str, latest))
+    spec = f"git+{url}@{tag}"
+    if pinned and not RELEASE.match(pinned):  # a pin to a branch, commit or other tag is never reinstalled
+        note.append(f"sb is pinned to {pinned}; release {tag} is available: pipx install --force {spec}")
+        return
+    if not (shutil.which("pipx") and "pipx" in sys.prefix and "venvs" in sys.prefix):
+        note.append(f"sb release {tag} is available; update with 'pipx install --force {spec}' "
+                    f"or 'pip install --upgrade --force-reinstall {spec}'")
         return
     try:
-        r = _run(["pipx", "reinstall", REPO], 180)
+        r = _run(["pipx", "install", "--force", spec], 180)
     except subprocess.TimeoutExpired:
         note.append("sb update timed out (the sleep goes on)")
         return
-    note.append(f"sb updated to {new[:7]}" if r.returncode == 0
-                else f"sb update failed: pipx reinstall exited {r.returncode} (the sleep goes on)")
+    note.append(f"sb updated to {tag}" if r.returncode == 0
+                else f"sb update failed: pipx install exited {r.returncode} (the sleep goes on)")
 
 
 def _changed(out: str) -> bool:

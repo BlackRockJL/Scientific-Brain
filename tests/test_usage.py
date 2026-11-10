@@ -101,11 +101,11 @@ def test_note_without_events_uses_created_and_weights_are_configurable(tmp_path)
 
 def test_rename_chain_carries_old_usage_to_the_current_slug(tmp_path):
     root = vault_with(tmp_path, [("c", "finding")], [(91, "work", "show", "a"), (3, "work", "show", "b")])
-    (root / ".sb" / "renames.tsv").write_text("a\tb\t2026-10-01\nb\tc\t2026-10-02\n", encoding="utf-8")
+    (root / ".sb" / "renames.tsv").write_text("a\tb\t2026-11-06\nb\tc\t2026-11-07\n", encoding="utf-8")  # old rows: no row numbers
     ev = usage.events(Vault(root))
     assert set(ev) == {"c"} and len(ev["c"]) == 2
     assert a_of(root, "c") == pytest.approx(math.log(92 ** -0.5 + 4 ** -0.5))
-    (root / ".sb" / "renames.tsv").write_text("a\tb\t2026-10-01\nb\ta\t2026-10-02\n", encoding="utf-8")  # renamed back
+    (root / ".sb" / "renames.tsv").write_text("a\tb\t2026-11-06\nb\ta\t2026-11-07\n", encoding="utf-8")  # renamed back
     assert set(usage.events(Vault(root))) == {"a"}
 
 
@@ -114,7 +114,7 @@ def test_cli_rename_appends_to_renames_and_keeps_usage(tmp_path):
     assert sb(v, "rename", "ftcs-stability-limit", "ftcs-limit")[0] == 0
     assert sb(v, "rename", "ftcs-limit", "ftcs-lim")[0] == 0
     assert (v / ".sb" / "renames.tsv").read_text().splitlines() == [
-        "ftcs-stability-limit\tftcs-limit\t2026-11-08", "ftcs-limit\tftcs-lim\t2026-11-08"]
+        "ftcs-stability-limit\tftcs-limit\t2026-11-08\t7\t0", "ftcs-limit\tftcs-lim\t2026-11-08\t7\t0"]
     assert "ftcs-lim" in usage.events(Vault(v)) and "ftcs-stability-limit" not in usage.events(Vault(v))
 
 
@@ -149,12 +149,12 @@ def test_edit_is_detected_from_a_changed_file(tmp_path):
     p.write_text(p.read_text().replace("second order", "2nd order"), encoding="utf-8")
     bump(p)
     sb(v, "map")
-    assert usage_lines(v) == [["2026-11-08", "work", "edit", "scheme-choice"]]
+    assert usage_lines(v) == [["2026-11-08", "sync", "edit", "scheme-choice"]]  # found by the index, not done in a session
     sb(v, "map")
     assert len(usage_lines(v)) == 1  # seen once
     add_note(v, "fresh-note")  # a new file counts as an edit too
     sb(v, "map")
-    assert ["2026-11-08", "work", "edit", "fresh-note"] in usage_lines(v)
+    assert ["2026-11-08", "sync", "edit", "fresh-note"] in usage_lines(v)
     (v / ".sb" / "sleeping").write_text("2026-11-08\n", encoding="utf-8")
     bump(p)
     sb(v, "map")
@@ -226,3 +226,39 @@ def test_stats_on_an_empty_vault_and_new_notes_count(tmp_path):
 def test_recall_ends_with_sleep_due_on_the_demo_vault(tmp_path):
     v = make_vault(tmp_path)
     assert sb(v, "recall", "stability")[1].rstrip().endswith("sleep due: never slept")
+
+
+def test_a_reused_name_keeps_its_own_events_apart_from_the_renamed_note(tmp_path):
+    root = vault_with(tmp_path, [("b", "finding")], [(7, "work", "show", "a")])
+    (root / ".sb" / "seeds.tsv").write_text(f"{ago(7)}\ta\t0.5\n", encoding="utf-8")
+    usage.log_rename(Vault(root), "a", "b", TODAY)  # counts the usage and seed rows so far
+    with open(root / ".sb" / "usage.tsv", "a", encoding="utf-8") as f:
+        f.write(f"{ago(0)}\twork\tcreate\ta\n{ago(0)}\twork\tshow\ta\n")  # a new note a, same day as the rename
+    with open(root / ".sb" / "seeds.tsv", "a", encoding="utf-8") as f:
+        f.write(f"{ago(0)}\ta\t0.3\n")
+    ev = usage.events(Vault(root))
+    assert ev["b"] == {TODAY - timedelta(days=7): 1.0}  # not the new note's create and show
+    assert ev["a"] == {TODAY: 1.0}  # the seed of the new note (0.3) stays below its create
+    assert usage.renames(Vault(root)) == {"a": "b"}
+
+
+def test_rename_then_new_through_the_cli(tmp_path):
+    v = make_vault(tmp_path)
+    before = usage.events(Vault(v))["scheme-choice"]
+    assert sb(v, "rename", "scheme-choice", "scheme-pick")[0] == 0
+    assert sb(v, "new", "concept", "scheme-choice", "-p", "heat", "--why", "again")[0] == 0
+    sb(v, "show", "scheme-choice")
+    ev = usage.events(Vault(v))
+    assert ev["scheme-pick"] == before and ev["scheme-choice"] == {TODAY: 1.0}
+
+
+def test_sync_edits_yield_to_a_seed_of_the_same_day_but_not_to_a_later_edit(tmp_path):
+    root = vault_with(tmp_path, [("a", "finding"), ("b", "finding")],
+                      [(0, "sync", "edit", "a"), (0, "sync", "edit", "b"), (0, "work", "show", "b")])
+    (root / ".sb" / "seeds.tsv").write_text(f"{ago(0)}\ta\t0.5\n{ago(0)}\tb\t0.5\n", encoding="utf-8")
+    ev = usage.events(Vault(root))
+    assert ev["a"] == {TODAY: 0.5} and ev["b"] == {TODAY: 1.0}  # a work use is no sync edit
+    with open(root / ".sb" / "usage.tsv", "a", encoding="utf-8") as f:
+        f.write(f"{TODAY + timedelta(days=1)}\tsync\tedit\ta\n")
+    assert usage.events(Vault(root))["a"][TODAY + timedelta(days=1)] == 1.0
+    assert usage.events(Vault(root), ignore_sync=True)["a"] == {TODAY: 0.5}  # only the seed is use

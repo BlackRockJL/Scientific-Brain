@@ -11,7 +11,7 @@ from collections import Counter
 from . import inbox
 from .vault import LOCATIONS, WIKI, ParseError, SbError, Vault
 
-VERSION = 5
+VERSION = 6
 # bm25 weights for slug, title, gist, cue, body, links: the cue counts most
 RANK = "bm25(fts, 3.0, 3.0, 2.0, 4.0, 1.0, 0.0)"
 COLS = "{slug title gist cue body} : "  # searches never look into the links column
@@ -183,16 +183,17 @@ class Index:
         return ",".join(map(str, out))
 
     def _put_inbox(self):
-        """Replace the inbox rows (negative rowids, location inbox, slug inbox:<id>) by the open lines."""
+        """Replace the inbox rows (negative rowids, slug inbox:<id>) by the open lines (location inbox) and the expired ones."""
         stamp = self._stamp()
         self.db.execute("DELETE FROM fts WHERE rowid < 0")
         self.db.execute("DELETE FROM short WHERE rid < 0")
-        for i, (id, day, proj, src, text) in enumerate(inbox.open_lines(self.v), 1):
+        rows = [(r, "inbox") for r in inbox.open_lines(self.v)] + [(r, "expired") for r in inbox.expired(self.v)]
+        for i, ((id, day, proj, src, text), loc) in enumerate(rows, 1):
             cols = "rowid, slug, title, gist, cue, body, links, project, type, location, rslug, rtitle, rgist, rcue"
             self.db.execute(f"INSERT INTO fts({cols}) VALUES({','.join('?' * 14)})",
-                            (-i, fold("inbox:" + id), "", fold(text), "", fold(src), "", proj, "inbox", "inbox",
+                            (-i, fold("inbox:" + id), "", fold(text), "", fold(src), "", proj, "inbox", loc,
                              "inbox:" + id, day, text, src))
-            self._put_short(-i, fold("inbox:" + id), "", "inbox", proj)  # a source path is no keyword
+            self._put_short(-i, fold("inbox:" + id), "", loc, proj)  # a source path is no keyword
         self.db.execute("INSERT OR REPLACE INTO meta VALUES('inbox', ?)", (stamp,))
 
     def refresh(self, full=False):
@@ -253,7 +254,7 @@ class Index:
 
     def _where(self, locs, project):
         sql = f"location IN ({','.join('?' * len(locs))})"
-        if locs == ("inbox",):  # inbox rows have negative rowids; the range keeps FTS5 from visiting every note
+        if set(locs) <= {"inbox", "expired"}:  # inbox rows have negative rowids; the range keeps FTS5 from visiting every note
             sql += " AND rowid < 0"
         return (sql + " AND project=?", [*locs, project]) if project else (sql, list(locs))
 
@@ -323,7 +324,7 @@ class Index:
         return self.db.execute("SELECT location, project, type FROM fts WHERE rowid > 0").fetchall()
 
     def n_inbox(self):
-        return self.db.execute("SELECT count(*) FROM fts WHERE rowid < 0").fetchone()[0]
+        return self.db.execute("SELECT count(*) FROM fts WHERE rowid < 0 AND location='inbox'").fetchone()[0]
 
     def n_notes(self):
         return self.db.execute("SELECT count(*) FROM files WHERE location='notes'").fetchone()[0]

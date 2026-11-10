@@ -4,6 +4,7 @@ import pytest
 from helpers import add_note, make_vault, sb
 
 from scientific_brain import usage
+from scientific_brain.index import Index
 from scientific_brain.vault import Vault
 
 TODAY = date(2026, 11, 8)
@@ -135,7 +136,7 @@ def test_budget_caps_the_plan_and_reports_deferred(tmp_path):
     v = make_vault(tmp_path)
     (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 3\n")
     out = sb(v, "sleep", "plan")[1]
-    assert "touched: 3 of 3 (notes and inbox lines), deferred: " in out and "deferred: 0" not in out
+    assert "touched: 3 of 3 (notes and inbox lines), deferred: 8" in out  # 11 items in the unlimited plan (see test above), 3 fit
     assert "## 1. Consolidate: 3 open" in out and "## 4. Verify: 0 new" in out  # consolidate fills first
 
 
@@ -157,10 +158,11 @@ def test_done_expires_logs_snapshot_and_clears_due(tmp_path):
     sb(v, "sleep", "begin")
     sb(v, "sleep", "plan")  # only lines a plan of this sleep showed can expire
     code, out, _ = sb(v, "sleep", "done", "first sleep")
-    assert code == 0 and out.splitlines()[0] == "slept 2026-11-08: 1 inbox lines settled (0 promoted), 0 archived, 0 created, 0 vetoes"
-    assert out.splitlines()[1].startswith("dream: 0 linked, 0 unrelated, ")  # the demo vault has unlinked pairs
+    assert code == 0 and out.splitlines()[0] == "slept 2026-11-08: 0 inbox lines settled (0 promoted), 1 expired, 0 archived, 0 created, 0 vetoes"
+    assert out.splitlines()[1] == "expired dddddd: stale line"
+    assert out.splitlines()[2].startswith("dream: 0 linked, 0 unrelated, ")  # the demo vault has unlinked pairs
     assert tsv(v, "inbox-done.tsv") == [["dddddd", "2026-11-08", "expired"]]
-    assert tsv(v, "sleep.tsv") == [["2026-11-08", "1", "0", "0", "0", "0", "first sleep"]]
+    assert tsv(v, "sleep.tsv") == [["2026-11-08", "0", "0", "0", "0", "0", "1", "first sleep"]]
     assert [r[0] for r in tsv(v, "snapshot.tsv")] == ["ftcs-stability-limit"] and not sleeping(v).exists()
     assert "sleep due" not in sb(v, "stats")[1] and "sleep due" not in sb(v, "recall", "observed", "order")[1]
 
@@ -216,7 +218,7 @@ def test_whole_sleep_counts_and_promotion_warning(tmp_path):
     assert sb(v, "new", "finding", "brand-new", "-p", "heat", "--why", "own measurement")[0] == 0
     code, out, _ = sb(v, "sleep", "done", "mixed")
     assert code == 0 and "warning" not in out  # three settled lines are too few for a rate
-    assert tsv(v, "sleep.tsv")[0][1:] == ["3", "2", "1", "1", "1", "mixed"]
+    assert tsv(v, "sleep.tsv")[0][1:] == ["3", "2", "1", "1", "1", "0", "mixed"]
     assert sb(v, "stats")[1].count("last sleep: 2026-11-08 (0 days ago)") == 1
 
 
@@ -345,3 +347,146 @@ def test_sleep_comes_due_when_a_full_plan_of_work_waits(tmp_path):
     assert "sleep due" not in out  # the last sleep was today: sleep_gap holds it back
     (v / ".sb" / "sleep.tsv").write_text((v / ".sb" / "sleep.tsv").read_text().replace("2026-11-08", "2026-11-07"))
     assert "sleep due: 12 items waiting (inbox 3, verify 9)" in sb(v, "stats")[1]
+
+
+def import_old_notes(v, n=39):
+    """n notes created a long time ago without any use, as an import brings them."""
+    kinds = ("finding", "concept", "decision", "derivation", "question")
+    for i in range(n):
+        typ, d = kinds[i % 5], f"2025-{i // 28 + 1:02d}-{i % 28 + 1:02d}"
+        add_note(v, f"imp-{i:02d}", type=typ, extra={"created": d, "updated": d}, title=f"Imported note {i}", cue=f"cue {i}",
+                 gist=f"Gist: imported {i}.", body="\n## Rejected\n\n- none\n" if typ == "decision" else "\n## Depends on\n\n- none\n" if typ == "question" else "")
+
+
+def fade_days(v):
+    """Slug -> first day from today on that the note is a forget candidate."""
+    vv, out = Vault(v), {}
+    for dt in range(0, 500):
+        for s, *_ in usage.forget_candidates(vv, date.fromordinal(TODAY.toordinal() + dt)):
+            out.setdefault(s, dt)
+    return out
+
+
+@pytest.mark.parametrize("check_first", [True, False])
+def test_baseline_seed_works_when_the_index_existed_before_the_import(tmp_path, check_first):
+    v = tmp_path / "v"
+    assert sb(v, "init", str(v))[0] == 0
+    sb(v, "stats")  # the index exists now, so the import shows up as edits
+    import_old_notes(v)
+    if check_first:
+        sb(v, "check")  # the sync logs every imported note as edited
+    code, out, _ = sb(v, "sleep", "baseline", "--seed", "210")
+    assert code == 0 and "seeded 39 notes without use" in out
+    sb(v, "stats")
+    sb(v, "map")  # later calls must not lift the seeds again
+    fades = fade_days(v)
+    assert len(fades) == 39 and min(fades.values()) >= 30 and max(fades.values()) <= 211
+    assert min(fades.values()) <= 32 and max(fades.values()) >= 205  # spread over the whole range
+    assert all(abs(x - (30 + 180 * i / 38)) <= 3 for i, x in enumerate(sorted(fades.values())))  # evenly spread
+    assert sb(v, "sleep", "baseline", "--seed", "210")[1].count("seeded 0 notes") == 1
+
+
+def test_baseline_seed_leaves_a_note_with_real_use_alone(tmp_path):
+    v = tmp_path / "v"
+    sb(v, "init", str(v))
+    sb(v, "stats")
+    import_old_notes(v, 3)
+    sb(v, "show", "imp-00")
+    assert "seeded 2 notes" in sb(v, "sleep", "baseline", "--seed", "100")[1]
+
+
+def test_done_keeps_expired_lines_apart_and_findable(tmp_path):
+    v = make_vault(tmp_path)
+    inb = v / ".sb" / "inbox.tsv"
+    inb.write_text("aaaaaa\t2026-09-01\theat\tdocs/x\tstale remark about quantum tunnelling\n"
+                   "bbbbbb\t2026-11-07\theat\t\tgood line\n")
+    sb(v, "sleep", "begin")
+    sb(v, "sleep", "plan")
+    assert sb(v, "inbox", "resolve", "bbbbbb", "--note", "scheme-choice")[0] == 0
+    out = sb(v, "sleep", "done", "s")[1]
+    assert out.splitlines()[0].startswith("slept 2026-11-08: 1 inbox lines settled (1 promoted), 1 expired, ")
+    assert "expired aaaaaa: stale remark about quantum tunnelling" in out
+    stats = sb(v, "stats")[1]
+    assert "promotion rate: 100% (1 of 1 settled), 1 expired" in stats and "inbox: 0 open" in stats
+    assert "aaaaaa" not in sb(v, "inbox")[1] and "(no open inbox lines)" in sb(v, "inbox")[1]
+    assert sb(v, "inbox", "--expired")[1].strip() == "aaaaaa  expired 2026-11-08  heat  stale remark about quantum tunnelling  (docs/x)"
+    assert "(no expired inbox lines)" in sb(v, "inbox", "--expired", "-p", "_general")[1]
+    rec = sb(v, "recall", "--inbox", "quantum", "tunnelling")[1]
+    assert "inbox:aaaaaa  [inbox expired, heat, 2026-09-01]" in rec
+    assert "+1 inbox matches (use --inbox)" in sb(v, "recall", "quantum", "tunnelling")[1]
+    assert Index(Vault(v)).n_inbox() == 0  # an expired line is not an open one
+
+
+def test_a_wait_on_a_due_line_is_not_expired_in_the_same_sleep(tmp_path):
+    v = make_vault(tmp_path)
+    inb = v / ".sb" / "inbox.tsv"
+    inb.write_text("aaaaaa\t2026-09-01\theat\t\tdue but wanted\nbbbbbb\t2026-09-02\theat\t\tdue and forgotten\n")
+    sb(v, "sleep", "begin")
+    sb(v, "sleep", "plan")
+    assert sb(v, "inbox", "resolve", "aaaaaa", "--wait")[0] == 0
+    out = sb(v, "sleep", "done", "s")[1]
+    assert "1 expired" in out and "expired bbbbbb:" in out and "aaaaaa" not in out
+    assert "aaaaaa" in sb(v, "inbox")[1] and "bbbbbb" not in sb(v, "inbox")[1]
+
+
+def planned(v):
+    return [r.split("\t")[1] for r in sleeping(v).read_text().splitlines()[1:] if r.startswith("planned\t")]
+
+
+def test_use_during_a_sleep_survives_for_notes_outside_the_plan(tmp_path):
+    v = make_vault(tmp_path)
+    sb(v, "sleep", "begin")
+    sb(v, "sleep", "plan")
+    inside = planned(v)[0]
+    add_note(v, "late-note")  # a parallel session writes it after the plan was made
+    sb(v, "show", "late-note")
+    sb(v, "show", inside)
+    ev = lambda s: usage.events(Vault(v)).get(s, {})  # noqa: E731
+    assert TODAY not in ev("late-note") and TODAY not in ev(inside)  # nothing counts while the sleep runs
+    sb(v, "sleep", "done", "s")
+    assert ev("late-note")[TODAY] == 1.0  # the plan did not name it, so nobody but the parallel session read it
+    assert TODAY not in ev(inside)  # the sleeper read this one
+
+
+def test_the_second_sleep_of_a_day_does_not_release_the_first_ones_use(tmp_path):
+    v = make_vault(tmp_path)
+    sb(v, "sleep", "begin")
+    sb(v, "sleep", "plan")
+    inside = planned(v)[0]
+    sb(v, "show", inside)
+    sb(v, "sleep", "done", "first")
+    sb(v, "sleep", "begin")
+    sb(v, "sleep", "done", "second, no plan")
+    assert TODAY not in usage.events(Vault(v)).get(inside, {})
+
+
+def test_a_replaced_sleep_releases_its_use_too(tmp_path):
+    v = make_vault(tmp_path)
+    sb(v, "sleep", "begin")
+    add_note(v, "late-note")
+    sb(v, "show", "late-note")
+    sleeping(v).write_text("2026-11-06\n")  # the sleep was never finished
+    assert "replaced the sleep" in sb(v, "sleep", "begin")[1]
+    assert usage.events(Vault(v))["late-note"][TODAY] == 1.0
+
+
+def test_a_marker_older_than_a_day_blocks_no_baseline_and_shows_in_stats(tmp_path):
+    v = make_vault(tmp_path)
+    sleeping(v).write_text("2026-11-01\n")
+    out = sb(v, "stats")[1]
+    assert "warning: the sleep marker from 2026-11-01 was left behind" in out
+    code, out, _ = sb(v, "sleep", "baseline")
+    assert code == 0 and "baseline:" in out
+    sleeping(v).write_text("2026-11-07\n")  # a day old still counts as running
+    assert sb(v, "sleep", "baseline")[0] == 2 and "left behind" not in sb(v, "stats")[1]
+
+
+def test_deferred_counts_notes_not_refusals(tmp_path):
+    v = make_vault(tmp_path)
+    for s, t in (("long-unused-a", "Crank Nicolson oscillates"), ("long-unused-b", "Multigrid smoother choice")):  # forget and verify
+        add_note(v, s, title=t, cue=t.lower(), extra={"created": "2025-01-01", "updated": "2025-01-01"})
+    full = sb(v, "sleep", "plan")[1]
+    assert "## 3. Forget: 2 candidates" in full and "deferred: 0" in full
+    n = int(full.split("touched: ")[1].split(" ")[0])
+    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 3\n")
+    assert f"touched: 3 of 3 (notes and inbox lines), deferred: {n - 3}" in sb(v, "sleep", "plan")[1]

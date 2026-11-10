@@ -7,10 +7,10 @@ name = "scientific-brain"
 version = "0.1.0"
 description = "A lean second brain for research and scientific computing, modelled on human memory"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "BlackRockJL" }]
-dependencies = []
+dependencies = ["tomli>=1.1; python_version < '3.11'"]
 keywords = ["second-brain", "knowledge-base", "research", "notes", "memory", "claude-code", "sqlite-fts5"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -21,6 +21,9 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Text Processing :: Indexing",
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/BlackRockJL/Scientific-Brain"

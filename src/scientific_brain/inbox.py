@@ -71,15 +71,24 @@ def resolve(v: Vault, id: str, outcome: str, day: date):
     v.append(DONE, id, day.isoformat(), outcome)
 
 
-def expire_inbox(v: Vault, today: date, shown=None) -> list:
-    """Book open lines older than inbox_wait_days as expired, only those in shown if given; returns their ids."""
-    ids = [r[0] for r in open_lines(v) if age(r, today) > v.cfg["lifecycle"]["inbox_wait_days"] and (shown is None or r[0] in shown)]
+def expire_inbox(v: Vault, today: date, shown=None, since: date | None = None) -> list:
+    """Book open lines older than inbox_wait_days as expired, only those in shown if given; returns their ids.
+    Lines booked as wait on or after since (the running sleep) are not overbooked."""
+    fin, wait = done(v), v.cfg["lifecycle"]["inbox_wait_days"]
+    ids = [r[0] for r in open_lines(v) if age(r, today) > wait and (shown is None or r[0] in shown)
+           and not (since and r[0] in fin and fin[r[0]][0] >= since.isoformat())]
     for i in ids:
         v.append(DONE, i, today.isoformat(), "expired")
     return ids
 
 
+def expired(v: Vault) -> list:
+    """Lines last booked as expired, in capture order; they stay findable but count neither as open nor as settled."""
+    fin = done(v)
+    return [r for r in lines(v) if fin.get(r[0], ("", ""))[1] == "expired"]
+
+
 def promotion(v: Vault):
-    """(lines promoted to a note, all lines booked except wait)."""
-    out = [o for _, o in done(v).values() if o != "wait"]
+    """(lines promoted to a note, all lines settled: booked except wait and expired)."""
+    out = [o for _, o in done(v).values() if o not in ("wait", "expired")]
     return sum(o.startswith("note:") for o in out), len(out)

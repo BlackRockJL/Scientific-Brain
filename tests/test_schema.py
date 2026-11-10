@@ -129,3 +129,14 @@ def test_parse_error_is_reported_with_line(tmp_path):
     v = make_vault(tmp_path)
     (v / "notes" / "heat" / "broken.md").write_text("---\ntitle x\n---\n", encoding="utf-8")
     assert any(m.startswith("notes/heat/broken.md:2: error") for m in messages(v))
+
+
+def test_every_todo_line_is_reported_with_its_line_number(tmp_path):
+    v = make_vault(tmp_path)
+    add_note(v, "x-note", body="\n- TODO\n\nprose\n- TODO\nTODO: later")
+    lines = [m for m in messages(v) if "x-note" in m and "unfilled TODO" in m]
+    assert len(lines) == 3
+    nums = [int(m.split("x-note.md:")[1].split(":")[0].split()[0]) for m in lines]
+    assert nums == sorted(set(nums)) and len(nums) == 3
+    text = (v / "notes" / "heat" / "x-note.md").read_text().split("\n")
+    assert all(text[n - 1].strip().lstrip("- ").startswith("TODO") for n in nums)

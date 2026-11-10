@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import os
 import re
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 LISTKEYS = {"sources", "superseded_by"}
 SLUG = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*\Z")  # \Z: "$" would accept a trailing newline

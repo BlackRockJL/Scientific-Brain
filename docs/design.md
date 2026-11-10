@@ -45,7 +45,7 @@ growth needs periodic reduction.
   the same; restoring a `wrong` note requires `--force`.
 - Inbox, inbox results, usage, renames, vetoes and sleeps are append-only TSV files under `.sb/`. Parallel
   sessions can append without losing lines. Only `index.sqlite` (cache), `snapshot.tsv` (content hashes of the
-  checked notes) and the `sleeping` marker (start date, shown inbox lines, verified notes) are rewritten.
+  checked notes) and the `sleeping` marker (start date, shown inbox lines, planned and verified notes) are rewritten.
 
 ## Search
 
@@ -70,8 +70,12 @@ growth needs periodic reduction.
 ## Activation
 
 Usage events, at most one per note and day (the strongest counts): creation, `show` and editing in a work
-session weigh 1.0, a sleep veto 0.5, being the first hit of `recall` 0.2. Calls during a sleep do not count,
-so maintenance cannot keep notes alive.
+session weigh 1.0, a sleep veto 0.5, being the first hit of `recall` 0.2. Calls during a sleep do not count, so
+maintenance cannot keep notes alive. `sb` cannot tell the sleeper from a parallel session, so the sleep's calls are
+logged as sleep and `sleep done` gives them back for every note the plan did not name (the sleeper read only those);
+for the named notes they lapse. A marker older than a day is a forgotten one: it tags nothing and blocks nothing.
+Edits found by the index sync are logged as `sync`, so that an import is not taken for use. A rename carries the
+events logged before it to the new name, counted by row, so a name freed by it starts without history.
 
     A = ln( Σ_j w_j · (Δt_j + 1)^(-0.5) ),   Δt_j = days since use j
 
@@ -117,13 +121,16 @@ The plan is computed without a model; the agent only judges.
   one several, and the work never piles up beyond one plan plus what arrives before the next sleep. The size of
   a plan stays fixed, so one sleep stays within what an agent can judge carefully.
 - `sleep done` snapshots only the notes verified in this sleep (and keeps the old hashes of the rest), so a
-  deferred note stays in the plan until a sleep verifies it. It expires due inbox lines the plan showed and
+  deferred note stays in the plan until a sleep verifies it. It expires due inbox lines the plan showed (not
+  those put on `--wait` in this sleep) and reports them apart from the settled ones: an expired line is neither
+  settled nor promoted, stays findable (`sb inbox --expired`, `recall --inbox`) and is listed with id and text. It
   warns when more than a quarter of at least ten settled inbox lines were promoted, a sign that the rank
   filter has become too loose.
 - `sleep baseline` accepts every note in its current form, e.g. after importing an existing collection: it
   writes the hashes of all notes to the snapshot, so verify lists only what changes afterwards. `verified` is
-  left alone and still tells which notes were never checked; no sleep is logged. With `--seed DAYS` it also
-  gives every note without use one start use today in `.sb/seeds.tsv`. Without it, an imported note counts only
+  left alone and still tells which notes were never checked; no sleep is logged. It syncs the index first, and
+  edits only that sync found do not count as use. With `--seed DAYS` it also
+  gives every note without use one start use today in `.sb/seeds.tsv`; a sync edit of the same or an earlier day yields to it. Without it, an imported note counts only
   its `created` date and falls below the threshold at once once it is older than H. The weight
   w = √((T + 1)/(H + 1)) makes a note fade after T days, and T runs from 30 to DAYS, the least recently updated
   note first. So an import of 1000 notes with `--seed 365` brings about three forget candidates a day instead

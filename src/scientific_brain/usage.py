@@ -24,44 +24,73 @@ def sleeping(v: Vault, day: date) -> bool:
         return False
 
 
-def log(v: Vault, kind: str, slug: str, day: date | None = None):
-    """Append an event; calls made while a sleep runs are logged as caller=sleep."""
+def log(v: Vault, kind: str, slug: str, day: date | None = None, caller: str = "work"):
+    """Append an event; calls made while a sleep runs are logged as caller=sleep, edits the index sync found as sync."""
     day = day or today()
-    v.append("usage.tsv", day.isoformat(), "sleep" if sleeping(v, day) else "work", kind, slug)
+    v.append("usage.tsv", day.isoformat(), "sleep" if sleeping(v, day) else caller, kind, slug)
 
 
 def log_rename(v: Vault, old: str, new: str, day: date | None = None):
-    v.append("renames.tsv", old, new, (day or today()).isoformat())
+    """Append old, new, date and the number of usage and seed rows so far: later rows belong to a note named old anew."""
+    v.append("renames.tsv", old, new, (day or today()).isoformat(), len(v.rows("usage.tsv", 4)), len(v.rows(SEEDS, 3)))
 
 
 def renames(v: Vault) -> dict:
     """Old slug -> current slug; chains and renames back are folded in order."""
     m: dict = {}
-    for old, new, _ in v.rows("renames.tsv", 3):
+    for old, new, *_ in v.rows("renames.tsv", 5):
         m = {k: (new if x == old else x) for k, x in m.items()}
         m.pop(new, None)
         m[old] = new
     return m
 
 
-def events(v: Vault) -> dict:
-    """Current slug -> {day: weight}: the strongest event per day; only caller=work counts, except veto."""
-    w, m, out = {k: v.cfg["activation"][k] for k in ("create", "show", "edit", "veto", "recall")}, renames(v), {}
-    for d, caller, kind, slug in v.rows("usage.tsv", 4):
-        if kind not in w or (caller != "work" and kind != "veto"):
+def renamer(v: Vault):
+    """Function (slug, row number, day, log) -> current slug; log 0 is usage.tsv, 1 is seeds.tsv. A row follows only the
+    renames made after it, so a note created under a freed name keeps its events (old rows without numbers compare dates)."""
+    by_old: dict = {}
+    for pos, (old, new, d, *n) in enumerate(v.rows("renames.tsv", 5)):
+        by_old.setdefault(old, []).append((pos, new, d, [int(x) if x.isdigit() else None for x in n]))
+
+    def current(slug, i, day, k=0):
+        pos = -1
+        while True:
+            for p, new, d, n in by_old.get(slug, ()):
+                if p > pos and (i < n[k] if n[k] is not None else day.isoformat() <= d):
+                    slug, pos = new, p
+                    break
+            else:
+                return slug
+    return current
+
+
+def events(v: Vault, ignore_sync: bool = False) -> dict:
+    """Current slug -> {day: weight}: the strongest event per day; only caller=work and sync count, except veto.
+    Sync edits (found by the index) yield to a later or same-day seed of the note; ignore_sync drops them."""
+    w, cur, out, seeds = {k: v.cfg["activation"][k] for k in ("create", "show", "edit", "veto", "recall")}, renamer(v), {}, []
+    for i, (d, slug, x) in enumerate(v.rows(SEEDS, 3)):
+        try:
+            day, wt = date.fromisoformat(d), float(x)
+        except ValueError:
+            continue
+        seeds.append((cur(slug, i, day, 1), day, wt))
+    seeded = {}
+    for s, day, _ in seeds:
+        seeded[s] = max(seeded.get(s, day), day)
+    for i, (d, caller, kind, slug) in enumerate(v.rows("usage.tsv", 4)):
+        if kind not in w or (caller not in ("work", "sync") and kind != "veto"):
             continue
         try:
             day = date.fromisoformat(d)
         except ValueError:
             continue
-        days = out.setdefault(m.get(slug, slug), {})
-        days[day] = max(days.get(day, 0.0), w[kind])
-    for d, slug, x in v.rows(SEEDS, 3):
-        try:
-            day, wt = date.fromisoformat(d), float(x)
-        except ValueError:
+        s = cur(slug, i, day)
+        if caller == "sync" and (ignore_sync or day <= seeded.get(s, date.min)):
             continue
-        days = out.setdefault(m.get(slug, slug), {})
+        days = out.setdefault(s, {})
+        days[day] = max(days.get(day, 0.0), w[kind])
+    for s, day, wt in seeds:
+        days = out.setdefault(s, {})
         days[day] = max(days.get(day, 0.0), wt)
     return out
 

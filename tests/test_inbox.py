@@ -133,7 +133,7 @@ def test_expire_inbox_books_only_due_open_lines(tmp_path):
     assert [r[0] for r in inbox.open_lines(vault)] == ["bbbbbb"]
     assert inbox.expire_inbox(vault, TODAY) == []
     assert inbox.expire_inbox(vault, TODAY + timedelta(days=1)) == ["bbbbbb"]  # injected date
-    assert inbox.promotion(vault) == (0, 4)
+    assert inbox.promotion(vault) == (0, 1)  # expired lines are not settled
 
 
 def test_recall_inbox_and_hint(tmp_path):

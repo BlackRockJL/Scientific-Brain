@@ -27,7 +27,7 @@ def test_new_creates_skeleton_per_type_and_check_demands_filling(tmp_path):
     assert "## Rejected" in text and "why: own measurement" in text and "type: decision" in text
     assert "ref: TODO" in (v / "notes" / "heat" / "fresh-source.md").read_text()
     code, out, _ = sb(v, "check")
-    assert code == 1 and out.count("unfilled TODO placeholder") == len(TYPES)
+    assert code == 1 and all(f"fresh-{t}.md" in out for t in TYPES) and out.count("unfilled TODO placeholder") > len(TYPES)  # every placeholder
 
 
 def test_new_shows_similar_notes_and_prevents_collisions(tmp_path):
@@ -158,3 +158,10 @@ def test_bad_sb_today_gives_a_clean_error(tmp_path, monkeypatch):
 def test_new_rejects_slug_with_newline(tmp_path):
     code, _, err = sb(make_vault(tmp_path), "new", "finding", "t4\n", "-p", "heat", "--why", "x")
     assert code == 2 and "valid slug" in err
+
+
+def test_init_template_describes_the_update_default(tmp_path):
+    root = tmp_path / "t"
+    sb(root, "init", str(root))
+    toml = (root / "sb.toml").read_text()
+    assert "# auto = true" in toml and "latest release tag" in toml and "# auto = false" not in toml

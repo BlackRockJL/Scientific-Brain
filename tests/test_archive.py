@@ -185,3 +185,47 @@ def test_archive_fields_in_notes_are_a_check_error(tmp_path):
     add_note(v, "misplaced", extra={"archived": "2026-11-01", "archived_why": "faded", "archived_reason": "x"})
     code, out, _ = sb(v, "check")
     assert code == 1 and out.count("is only allowed in archive/") == 3
+
+
+def snapshot(v):
+    return {p.relative_to(v).as_posix(): p.read_bytes() for p in v.rglob("*.md")}
+
+
+def test_rename_with_broken_superseded_by_changes_nothing(tmp_path):
+    v = make_vault(tmp_path)
+    add_note(v, "x-old")
+    add_note(v, "y-link", body="\nSee [[x-old]].\n")
+    add_note(v, "z-arch", loc="archive", extra={"superseded_by": "[x-old"})
+    before = snapshot(v)
+    code, out, err = sb(v, "rename", "x-old", "x-new")
+    assert code == 2 and "z-arch.md" in err and "nothing was renamed" in err and "Traceback" not in err
+    assert snapshot(v) == before
+
+
+def test_rename_with_unreadable_file_names_it_and_changes_nothing(tmp_path):
+    v = make_vault(tmp_path)
+    add_note(v, "x-old")
+    add_note(v, "y-link", body="\nSee [[x-old]].\n")
+    (v / "archive" / "heat" / "bad.md").write_bytes(b"---\ntitle: \xff\xfe\n---\n")
+    before = snapshot(v)
+    code, out, err = sb(v, "rename", "x-old", "x-new")
+    assert code == 2 and "bad.md" in err and "UnicodeDecodeError" not in err
+    assert snapshot(v) == before
+
+
+def test_rename_write_failure_restores_the_texts(tmp_path, monkeypatch):
+    from pathlib import Path
+    v = make_vault(tmp_path)
+    add_note(v, "x-old")
+    add_note(v, "y-link", body="\nSee [[x-old]].\n")
+    add_note(v, "w-link", body="\nSee [[x-old]].\n")
+    before = snapshot(v)
+    real = Path.rename
+
+    def boom(self, target):
+        raise OSError("disk full") if self.name == "x-old.md" else real(self, target)
+
+    monkeypatch.setattr(Path, "rename", boom)
+    code, out, err = sb(v, "rename", "x-old", "x-new")
+    assert code == 2 and "left as they were" in err
+    assert snapshot(v) == before
