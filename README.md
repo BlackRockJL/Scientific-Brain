@@ -27,9 +27,11 @@ The agent then works through these steps:
    if `sb` is not found.
 2. **Install the CLI.**
    ```bash
-   pipx install git+https://github.com/BlackRockJL/Scientific-Brain
+   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.2.1
    sb --version
    ```
+   This form follows the releases (see [Update and uninstall](#update-and-uninstall)); `@v0.2.1` instead
+   keeps this version.
 3. **Create the vault.** `sb init ~/research-brain` (any folder works; see [Where the vault lives](#where-the-vault-lives)).
 4. **Tell Claude Code where it is.** Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`),
    with an absolute path (`~` does not work in JSON), e.g. `/home/you/research-brain` or
@@ -148,14 +150,21 @@ The vault can be versioned with git; `sb init` writes a `.gitignore` for the sea
 
 Self-update is on by default (`auto = true` under `[update]` in `sb.toml`): each sleep starts by bringing
 both parts up to the newest release tag `vX.Y.Z` of the repository (never `HEAD`): the CLI with
-`pipx install --force git+<repository>@<tag>` for a pipx install, the plugin with `claude plugin marketplace update`
-and `claude plugin update`. The plugin follows the same switch. A new plugin loads after a restart of Claude Code.
-An install pinned to a release tag is moved to the newer release; any other pin (branch, commit) and developer
-(editable) installs are never touched, they only get a hint. Without a release tag in the repository only a hint
-appears. Switch it off with `auto = false` or with `SB_NO_UPDATE=1`.
+`pipx install --force git+<repository>@refs/tags/<tag>` for a pipx install, the plugin with `claude plugin marketplace update`
+and `claude plugin update`. The plugin follows the same switch. The marketplace entry points at the plugin as of
+the current release tag (`ref`), so the plugin, its hooks included, changes only with a release, never with a
+commit on the default branch. A new plugin loads after a restart of Claude Code.
+Only an install without a pin or pinned as `@refs/tags/vX.Y.Z` (the form sb uses itself) follows the releases.
+Any other pin, `@vX.Y.Z` included, and developer (editable) installs are never touched; they only get a hint.
+Without a release tag in the repository only a hint appears. Switch it off with `auto = false` or with
+`SB_NO_UPDATE=1`.
 
-By hand: `pipx reinstall scientific-brain` (`pipx upgrade` does not reinstall a git install with an unchanged
-version number) and `/plugin marketplace update scientific-brain` in Claude Code.
+By hand: `pipx install --force git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/<tag>` and
+`/plugin marketplace update scientific-brain` in Claude Code.
+
+A release sets the same version in `pyproject.toml`, `__init__.py`, `plugin/.claude-plugin/plugin.json`, the
+`ref` in `.claude-plugin/marketplace.json` and the install line above (a test checks this), then tags that
+commit `vX.Y.Z` and pushes branch and tag together: `git push --atomic origin main vX.Y.Z`.
 
 A `sb rename` is all or nothing: if any note cannot be read or written, nothing is changed.
 

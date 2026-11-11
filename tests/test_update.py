@@ -1,12 +1,14 @@
 import json
+import re
 import subprocess
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from helpers import make_vault, sb
 
-from scientific_brain import update
+from scientific_brain import __version__, update
 from scientific_brain.vault import SbError, Vault
 
 OLD, NEW = "a" * 40, "b" * 40
@@ -56,6 +58,16 @@ def vault(tmp_path, auto=True):
     return Vault(root)
 
 
+def test_release_files_agree_on_the_version():
+    root = Path(__file__).resolve().parent.parent
+    ver = re.search(r'^version = "(.+)"', (root / "pyproject.toml").read_text(encoding="utf-8"), re.M).group(1)
+    src = json.loads((root / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))["plugins"][0]["source"]
+    assert __version__ == ver
+    assert json.loads((root / "plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"] == ver
+    assert src == {"source": "git-subdir", "url": "BlackRockJL/Scientific-Brain", "path": "plugin", "ref": f"v{ver}"}
+    assert f"Scientific-Brain@refs/tags/v{ver}\n" in (root / "README.md").read_text(encoding="utf-8")
+
+
 def test_editable_or_plain_install_does_nothing(tmp_path, monkeypatch):
     v = vault(tmp_path)
     for info in ({"url": "file:///x", "dir_info": {"editable": True}}, None):
@@ -92,7 +104,7 @@ def test_current_release_does_nothing(tmp_path, monkeypatch):
 def test_newer_release_with_pipx_installs_the_highest_tag(tmp_path, monkeypatch):
     f = Fake(monkeypatch, vcs(), claude=False)
     assert update.update(vault(tmp_path)) == ["sb updated to v0.10.0"]  # 0.10.0 beats 0.9.0 and 0.2.0; rc and other tags ignored
-    assert ["pipx", "install", "--force", f"git+{URL}@v0.10.0"] in f.calls and ["pipx", "reinstall", "scientific-brain"] not in f.calls
+    assert ["pipx", "install", "--force", f"git+{URL}@refs/tags/v0.10.0"] in f.calls and ["pipx", "reinstall", "scientific-brain"] not in f.calls
 
 
 def test_new_head_without_new_release_does_nothing(tmp_path, monkeypatch):
@@ -100,16 +112,16 @@ def test_new_head_without_new_release_does_nothing(tmp_path, monkeypatch):
     assert update.update(vault(tmp_path)) == [] and f.names() == ["git ls-remote"]
 
 
-def test_release_tag_pin_follows_the_releases(tmp_path, monkeypatch):
+def test_own_pin_follows_the_releases(tmp_path, monkeypatch):
     v = vault(tmp_path)
-    f = Fake(monkeypatch, vcs(pin="v0.1.0"), claude=False)
+    f = Fake(monkeypatch, vcs(pin="refs/tags/v0.1.0"), claude=False)
     assert update.update(v) == ["sb updated to v0.10.0"]
-    assert ["pipx", "install", "--force", f"git+{URL}@v0.10.0"] in f.calls
-    f = Fake(monkeypatch, vcs(pin="v0.10.0"), claude=False, have="0.10.0")  # current: silent
+    assert ["pipx", "install", "--force", f"git+{URL}@refs/tags/v0.10.0"] in f.calls
+    f = Fake(monkeypatch, vcs(pin="refs/tags/v0.10.0"), claude=False, have="0.10.0")  # current: silent
     assert update.update(v) == [] and f.names() == ["git ls-remote"]
 
 
-@pytest.mark.parametrize("pin", ["main", OLD, "v1.0", "release-1", "v0.1.0-rc1"])
+@pytest.mark.parametrize("pin", ["v0.1.0", "main", OLD, "v1.0", "release-1", "v0.1.0-rc1", "refs/heads/main"])
 def test_other_pins_are_never_reinstalled_only_hinted(tmp_path, monkeypatch, pin):
     v = vault(tmp_path)
     f = Fake(monkeypatch, vcs(pin=pin), claude=False)
@@ -136,7 +148,7 @@ def test_unknown_installed_version_does_nothing(tmp_path, monkeypatch):
 def test_newer_release_without_pipx_hints(tmp_path, monkeypatch):
     f = Fake(monkeypatch, vcs(), pipx=False, claude=False)
     out = update.update(vault(tmp_path))
-    assert len(out) == 1 and "pipx install --force" in out[0] and f"{URL}@v0.10.0" in out[0]
+    assert len(out) == 1 and "pipx install --force" in out[0] and f"{URL}@refs/tags/v0.10.0" in out[0]
     assert f.names() == ["git ls-remote"]
 
 

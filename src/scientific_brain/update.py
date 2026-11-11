@@ -31,7 +31,7 @@ def _direct_url() -> dict | None:
 TAG = re.compile(r"refs/tags/v(\d+)\.(\d+)\.(\d+)(?:\^\{\})?\Z")  # release tags vX.Y.Z; ^{} marks an annotated tag's target
 
 
-RELEASE = re.compile(r"v\d+\.\d+\.\d+\Z")  # a pin of this form follows the releases
+OWN = re.compile(r"refs/tags/v\d+\.\d+\.\d+\Z")  # how sb pins its own installs; any other pin is the user's and stays
 
 
 def _installed() -> tuple[int, ...] | None:
@@ -71,9 +71,9 @@ def _cli(note: list[str]):
     if have is None or latest <= have:
         return
     tag = "v" + ".".join(map(str, latest))
-    spec = f"git+{url}@{tag}"
-    if pinned and not RELEASE.match(pinned):  # a pin to a branch, commit or other tag is never reinstalled
-        note.append(f"sb is pinned to {pinned}; release {tag} is available: pipx install --force {spec}")
+    spec = f"git+{url}@refs/tags/{tag}"
+    if pinned and not OWN.match(pinned):
+        note.append(f"sb is pinned to {pinned}; release {tag} is available: pipx install --force {spec} (follows the releases from then on)")
         return
     if not (shutil.which("pipx") and "pipx" in sys.prefix and "venvs" in sys.prefix):
         note.append(f"sb release {tag} is available; update with 'pipx install --force {spec}' "
