@@ -88,9 +88,9 @@ def test_verify_a_keeps_unverified_notes_until_a_sleep_verifies_them(tmp_path):
     assert out.index("scheme-choice (changed)") < out.index("fresh-note (new)")  # edited notes first
 
 
-def test_verify_a_lists_deferred_notes_again_after_done(tmp_path):
+def test_verify_a_lists_deferred_notes_again_after_done(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, "B0", 5)
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 5\n")
     sb(v, "sleep", "begin")
     out = sb(v, "sleep", "plan")[1]
     listed = [ln.split()[1] for ln in out.split("## 4.")[1].splitlines() if ln.endswith(("]", "none")) and "(new)" in ln]
@@ -129,23 +129,23 @@ def test_verify_b_takes_oldest_verified_of_the_active_notes(tmp_path):
     sb(v, "sleep", "done", "s")
     out = sb(v, "sleep", "plan")[1].split("## 4.")[1]
     assert "verified never)" not in out  # unchecked notes are in verify (a), not (b)
-    assert out.index("ftcs-stability-limit (A=") < out.index("scheme-choice (A=")  # oldest verified first
+    assert out.index("ftcs-stability-limit (R=") < out.index("scheme-choice (R=")  # oldest verified first
 
 
-def test_budget_caps_the_plan_and_reports_deferred(tmp_path):
+def test_budget_caps_the_plan_and_reports_deferred(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, "B0", 3)
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 3\n")
     out = sb(v, "sleep", "plan")[1]
     assert "touched: 3 of 3 (notes and inbox lines), deferred: 8" in out  # 11 items in the unlimited plan (see test above), 3 fit
     assert "## 1. Consolidate: 3 open" in out and "## 4. Verify: 0 new" in out  # consolidate fills first
 
 
-def test_veto_counts_in_activation_and_is_logged(tmp_path):
+def test_veto_counts_as_use_and_is_logged(tmp_path):
     v = make_vault(tmp_path)
     sb(v, "sleep", "begin")
     assert sb(v, "sleep", "veto", "morton-mayers-assessment", "still the reference we cite")[0] == 0
     assert tsv(v, "vetoes.tsv") == [["2026-11-08", "morton-mayers-assessment", "still the reference we cite"]]
-    assert usage.events(Vault(v))["morton-mayers-assessment"] == {TODAY: 0.5}  # counts although caller=sleep
+    assert usage.events(Vault(v))["morton-mayers-assessment"] == {TODAY: 1.0}  # counts although caller=sleep
     assert tsv(v, "usage.tsv")[-1] == ["2026-11-08", "sleep", "veto", "morton-mayers-assessment"]
     assert sb(v, "sleep", "veto", "ftcs-cfl-guess", "archived")[0] == 2  # only notes/
     assert sb(v, "sleep", "veto", "scheme-choice", "  ")[0] == 2
@@ -158,18 +158,22 @@ def test_done_expires_logs_snapshot_and_clears_due(tmp_path):
     sb(v, "sleep", "begin")
     sb(v, "sleep", "plan")  # only lines a plan of this sleep showed can expire
     code, out, _ = sb(v, "sleep", "done", "first sleep")
-    assert code == 0 and out.splitlines()[0] == "slept 2026-11-08: 0 inbox lines settled (0 promoted), 1 expired, 0 archived, 0 created, 0 vetoes"
+    planned = int(out.split("; ")[1].split(" of ")[1].split(" ")[0])
+    assert code == 0 and out.splitlines()[0].startswith("slept 2026-11-08: 0 inbox lines settled (0 promoted), 1 expired, 0 archived, 0 created, 0 vetoes; ")
+    assert out.splitlines()[0].endswith(f" of {planned} planned items left undone")  # the plan was not worked off; the expired line counts as left
     assert out.splitlines()[1] == "expired dddddd: stale line"
     assert out.splitlines()[2].startswith("dream: 0 linked, 0 unrelated, ")  # the demo vault has unlinked pairs
     assert tsv(v, "inbox-done.tsv") == [["dddddd", "2026-11-08", "expired"]]
-    assert tsv(v, "sleep.tsv") == [["2026-11-08T12:00", "0", "0", "0", "0", "0", "1", "first sleep"]]
+    row = tsv(v, "sleep.tsv")
+    assert len(row) == 1 and row[0][:8] == ["2026-11-08T12:00", "0", "0", "0", "0", "0", "1", "first sleep"]
+    assert row[0][8] == str(planned) and 0 < int(row[0][9]) <= planned  # planned and left, appended by 0.3
     assert [r[0] for r in tsv(v, "snapshot.tsv")] == ["ftcs-stability-limit"] and not sleeping(v).exists()
     assert "sleep due" not in sb(v, "stats")[1] and "sleep due" not in sb(v, "recall", "observed", "order")[1]
 
 
-def test_done_expires_only_lines_the_plan_showed(tmp_path):
+def test_done_expires_only_lines_the_plan_showed(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, "B0", 1)
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 1\n")
     inb = v / ".sb" / "inbox.tsv"
     inb.write_text(inb.read_text() + "eeeeee\t2026-08-01\theat\t\toldest line\nffffff\t2026-08-02\theat\t\tsecond line\n")
     sb(v, "sleep", "begin")
@@ -179,14 +183,13 @@ def test_done_expires_only_lines_the_plan_showed(tmp_path):
     assert tsv(v, "inbox-done.tsv") == [["eeeeee", "2026-11-08", "dropped"]]  # ffffff was never shown, it waits
 
 
-def test_forget_cap_binds_only_while_other_work_waits(tmp_path):
+def test_forget_cap_binds_only_while_other_work_waits(tmp_path, monkeypatch):
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nforget_budget = 1\n")
     for s, t in (("long-unused-a", "Crank Nicolson oscillates"), ("long-unused-b", "Multigrid smoother choice")):
         add_note(v, s, title=t, cue=t.lower(), extra={"created": "2025-01-01", "updated": "2025-01-01"})
     out = sb(v, "sleep", "plan")[1]
     assert "## 3. Forget: 2 candidates" in out and "deferred: 0" in out  # budget left after verify takes the rest
-    (v / "sb.toml").write_text((v / "sb.toml").read_text().replace("forget_budget = 1", "forget_budget = 1\nsleep_budget = 4"))
+    monkeypatch.setattr(usage, "B0", 4)  # 3 inbox lines leave room for 1; the share of forget in the queues rounds up to 1
     out = sb(v, "sleep", "plan")[1]
     assert "## 3. Forget: 1 candidates" in out and "touched: 4 of 4" in out  # a full plan keeps the cap
 
@@ -218,7 +221,7 @@ def test_whole_sleep_counts_and_promotion_warning(tmp_path):
     assert sb(v, "new", "finding", "brand-new", "-p", "heat", "--why", "own measurement")[0] == 0
     code, out, _ = sb(v, "sleep", "done", "mixed")
     assert code == 0 and "warning" not in out  # three settled lines are too few for a rate
-    assert tsv(v, "sleep.tsv")[0][1:] == ["3", "2", "1", "1", "1", "0", "mixed"]
+    assert tsv(v, "sleep.tsv")[0][1:] == ["3", "2", "1", "1", "1", "0", "mixed", "0", "0"]  # no plan was made: nothing planned, nothing left
     assert sb(v, "stats")[1].count("last sleep: 2026-11-08 (0 days ago)") == 1
 
 
@@ -247,7 +250,9 @@ def test_plan_lists_forget_candidates_with_last_use(tmp_path):
     v = make_vault(tmp_path)
     add_note(v, "long-unused", extra={"created": "2025-01-01", "updated": "2025-01-01"})
     out = sb(v, "sleep", "plan")[1]
-    assert "## 3. Forget: 1 candidates" in out and "- long-unused [finding] A=-3.26" in out and "last used 2025-01-01" in out
+    S = usage.learned(Vault(v), TODAY)["finding"]  # never used: it still rests its initial stability, counted from creation
+    line = f"- long-unused [finding] R={S / (S + 676):.2f} stability {S:.0f} days, last used 2025-01-01"  # 676 days to 2026-11-08
+    assert "## 3. Forget: 1 candidates" in out and line in out
 
 
 def baseline(v):
@@ -258,7 +263,7 @@ def baseline(v):
 
 
 def verify_a(v):
-    return "\n".join(ln for ln in sb(v, "sleep", "plan")[1].split("## 4.")[1].splitlines() if "(A=" not in ln)
+    return "\n".join(ln for ln in sb(v, "sleep", "plan")[1].split("## 4.")[1].splitlines() if "(R=" not in ln)
 
 
 def test_an_edited_note_stays_unchecked_through_rename(tmp_path):
@@ -328,13 +333,12 @@ def test_baseline_seed_lets_an_import_fade_one_by_one(tmp_path):
             fades.setdefault(s, dt)
     assert len(fades) == n and min(fades.values()) >= 30 and max(fades.values()) <= 366
     assert [fades[f"old-{i}"] for i in range(5)] == sorted(fades[f"old-{i}"] for i in range(5))  # oldest update first
-    assert sb(v, "sleep", "baseline", "--seed", "365")[1].count("seeded 0 notes") == 1  # a rerun seeds nothing twice
     assert sb(v, "sleep", "baseline", "--seed", "20")[0] == 2
 
 
-def test_sleep_comes_due_when_a_full_plan_of_work_waits(tmp_path):
+def test_sleep_comes_due_when_a_full_plan_of_work_waits(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, "B0", 12)
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 12\n")
     sb(v, "sleep", "baseline")
     sb(v, "sleep", "begin")
     sb(v, "sleep", "done", "first")
@@ -344,8 +348,8 @@ def test_sleep_comes_due_when_a_full_plan_of_work_waits(tmp_path):
         add_note(v, f"fresh-note-{i}")
     out = sb(v, "stats")[1]
     assert "waiting for a sleep: 12 (inbox 3, verify 9, forget 0)" in out
-    assert "sleep due" not in out  # the last sleep was today: sleep_gap holds it back
-    log = v / ".sb" / "sleep.tsv"  # SB_TODAY runs at noon; sleep_gap_hours = 5
+    assert "sleep due" not in out  # the last sleep was today: GAP_HOURS holds it back
+    log = v / ".sb" / "sleep.tsv"  # SB_TODAY runs at noon; GAP_HOURS = 5
     log.write_text(log.read_text().replace("2026-11-08T12:00", "2026-11-08T07:01"))
     assert "sleep due" not in sb(v, "stats")[1]
     log.write_text(log.read_text().replace("2026-11-08T07:01", "2026-11-08T07:00"))
@@ -388,7 +392,17 @@ def test_baseline_seed_works_when_the_index_existed_before_the_import(tmp_path, 
     assert len(fades) == 39 and min(fades.values()) >= 30 and max(fades.values()) <= 211
     assert min(fades.values()) <= 32 and max(fades.values()) >= 205  # spread over the whole range
     assert all(abs(x - (30 + 180 * i / 38)) <= 3 for i, x in enumerate(sorted(fades.values())))  # evenly spread
-    assert sb(v, "sleep", "baseline", "--seed", "210")[1].count("seeded 0 notes") == 1
+
+
+def test_baseline_seed_twice_seeds_nothing_twice(tmp_path):
+    v = tmp_path / "v"
+    assert sb(v, "init", str(v))[0] == 0
+    sb(v, "stats")
+    import_old_notes(v, 5)
+    assert "seeded 5 notes" in sb(v, "sleep", "baseline", "--seed", "100")[1]
+    rows = (v / ".sb" / "seeds.tsv").read_text().splitlines()
+    assert "seeded 0 notes" in sb(v, "sleep", "baseline", "--seed", "100")[1]
+    assert (v / ".sb" / "seeds.tsv").read_text().splitlines() == rows
 
 
 def test_baseline_seed_leaves_a_note_with_real_use_alone(tmp_path):
@@ -486,12 +500,12 @@ def test_a_marker_older_than_a_day_blocks_no_baseline_and_shows_in_stats(tmp_pat
     assert sb(v, "sleep", "baseline")[0] == 2 and "left behind" not in sb(v, "stats")[1]
 
 
-def test_deferred_counts_notes_not_refusals(tmp_path):
+def test_deferred_counts_notes_not_refusals(tmp_path, monkeypatch):
     v = make_vault(tmp_path)
     for s, t in (("long-unused-a", "Crank Nicolson oscillates"), ("long-unused-b", "Multigrid smoother choice")):  # forget and verify
         add_note(v, s, title=t, cue=t.lower(), extra={"created": "2025-01-01", "updated": "2025-01-01"})
     full = sb(v, "sleep", "plan")[1]
     assert "## 3. Forget: 2 candidates" in full and "deferred: 0" in full
     n = int(full.split("touched: ")[1].split(" ")[0])
-    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[lifecycle]\nsleep_budget = 3\n")
+    monkeypatch.setattr(usage, "B0", 3)
     assert f"touched: 3 of 3 (notes and inbox lines), deferred: {n - 3}" in sb(v, "sleep", "plan")[1]

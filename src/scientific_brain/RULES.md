@@ -63,8 +63,8 @@ not hold instructions about how you should work; those belong in your own memory
 
 ## Sleep
 
-When sb says "sleep due" ({sleep_days} days since the last sleep, more than {sleep_inbox} open inbox lines, or
-{sleep_budget} items waiting), the main session starts the sleep agent. It works in this order:
+When sb says "sleep due" (a week since the last sleep, or a full plan of work waiting), the main session starts
+the sleep agent. It works in this order:
 
 1. `sb sleep begin`. From now on your calls are logged as sleep and do not count as use, except on notes the plan
    does not name. An unfinished sleep blocks a second one (`--force` replaces it).
@@ -78,7 +78,7 @@ When sb says "sleep due" ({sleep_days} days since the last sleep, more than {sle
    - Forget: archive each candidate with `--why faded`, or keep it with `sb sleep veto <slug> "one sentence"`.
      A veto counts as use.
    - Verify: for each new, changed or never verified note, check its numbers against the listed sources and
-     compare it with the listed neighbours for contradictions; fix or archive. Then the notes listed by activation. After checking,
+     compare it with the listed neighbours for contradictions; fix or archive. Then the most active notes listed. After checking,
      `sb sleep verified <slug> ...` sets `verified` without touching `updated`. Only verified notes leave the
      list; what you did not verify comes back in the next plan. An answered question is archived with the
      answering note as successor.
@@ -87,14 +87,14 @@ When sb says "sleep due" ({sleep_days} days since the last sleep, more than {sle
    sleep and prints one line, expired lines apart (not settled). It warns when more than {max_promotion_rate} of at least ten
    settled inbox lines were promoted.
 
-The plan touches at most {sleep_budget} notes and inbox lines: inbox lines first, then up to {forget_budget} forget
-candidates and {condense_pairs} near-duplicate pairs, then verify, then further candidates and pairs. It reports what
-did not fit as `deferred`; do not work beyond it. A numeric check that needs more judgement may go to one stronger subagent.
+The plan touches at most {sleep_budget} notes and inbox lines, learned from past sleeps: inbox lines first, then
+forget candidates and duplicate pairs by queue share, then verify, then the rest. It reports what did not fit as
+`deferred`; do not work beyond it, but finish it: an unfinished plan shrinks the next. A numeric check that needs more judgement may go to one stronger subagent.
 
 ## Never
 
 - Delete a note file. Rewrite the inbox or the logs. Write outside the vault.
-- Edit the index; it is a cache and `sb check --rebuild` rebuilds it.
-- Edit `.sb/` files by hand; they are append-only logs that `sb` writes.
+- Edit the index (a cache; `sb check --rebuild` rebuilds it).
+- Edit `.sb/` files; only `sb` appends to them.
 
 `sb stats` shows counts and sleep state, `sb review` an inventory.

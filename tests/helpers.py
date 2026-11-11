@@ -52,3 +52,19 @@ def add_note(vault, slug, loc="notes", project="heat", type="finding", title="A 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text + body, encoding="utf-8")
     return path
+
+
+def init_vault(tmp_path, name="v") -> Path:
+    """An empty vault made by `sb init`."""
+    root = Path(tmp_path) / name
+    code, _, err = sb(root, "init", str(root))
+    assert code == 0, err
+    return root
+
+
+def write_log(vault, name, *rows):
+    """Replace .sb/<name> with the given rows (tuples or ready-made lines); returns the path."""
+    path = Path(vault) / ".sb" / name
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("".join(("\t".join(map(str, r)) if isinstance(r, (tuple, list)) else r) + "\n" for r in rows), encoding="utf-8")
+    return path

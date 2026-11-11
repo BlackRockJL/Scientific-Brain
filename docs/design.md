@@ -25,8 +25,10 @@ enforce:
   periodic sleep that both consolidates and reduces.
 - **Active forgetting** makes traces inaccessible rather than erasing them (Davis & Zhong 2017; Ryan &
   Frankland 2022). Hence the archive instead of deletion.
-- **Use predicts need** (Anderson & Schooler 1991), formalised as ACT-R base-level activation. Hence the
-  usage log and the activation threshold.
+- **Use predicts need** (Anderson & Schooler 1991). Hence the usage log: what is used stays, what is not fades.
+- **Spacing:** a memory retrieved shortly before it would be lost gains more stability than one retrieved again
+  at once (Bjork & Bjork 1992; Cepeda et al. 2006), the model behind spaced-repetition schedulers such as FSRS
+  (Ye, Su & Cao 2022). Hence one stability per note that grows with every use or veto.
 - **Reconsolidation:** a retrieved memory becomes open to update (Nader, Schafe & LeDoux 2000). Hence the rule
   to correct a note while it is being used.
 - **Encoding specificity** (Tulving & Thomson 1973): retrieval needs a matching cue. Hence the `cue` field.
@@ -46,6 +48,7 @@ growth needs periodic reduction.
 - Inbox, inbox results, usage, renames, vetoes and sleeps are append-only TSV files under `.sb/`. Parallel
   sessions can append without losing lines. Only `index.sqlite` (cache), `snapshot.tsv` (content hashes of the
   checked notes) and the `sleeping` marker (start date, shown inbox lines, planned and verified notes) are rewritten.
+- `sb rename` is all or nothing: if any note cannot be read or written, nothing is changed.
 
 ## Search
 
@@ -67,24 +70,45 @@ growth needs periodic reduction.
   of the documents, so in small vaults bm25 scores are unusable as a cut-off. A match must contain at least half
   of the search terms; bm25 with column weights `cue > title > gist > body` only orders the matches.
 
-## Activation
+## Stability
 
-Usage events, at most one per note and day (the strongest counts): creation, `show` and editing in a work
-session weigh 1.0, a sleep veto 0.5, being the first hit of `recall` 0.2. Calls during a sleep do not count, so
+Nothing about forgetting is set by hand; the vault learns it from its own log.
+
+Usage events, at most one per note and day (the strongest counts): creation, `show`, editing in a work session
+and a sleep veto are full reviews, the first hit of `recall` half a one. Calls during a sleep do not count, so
 maintenance cannot keep notes alive. `sb` cannot tell the sleeper from a parallel session, so the sleep's calls are
 logged as sleep and `sleep done` gives them back for every note the plan did not name (the sleeper read only those);
 for the named notes they lapse. A marker older than a day is a forgotten one: it tags nothing and blocks nothing.
 Edits found by the index sync are logged as `sync`, so that an import is not taken for use. A rename carries the
 events logged before it to the new name, counted by row, so a name freed by it starts without history.
 
-    A = ln( Σ_j w_j · (Δt_j + 1)^(-0.5) ),   Δt_j = days since use j
+Each note has a stability `S`, the number of days it may rest unused. Replaying its events in order, the first
+sets `S = S0`; every later review on a new day, of strength q, does
 
-A note becomes a forget candidate when `A` falls below the value of a single full use `H` days ago
-(`H = 90`, 180 for decisions and derivations). A note used once fades after about three months, one used
-twice after about a year, a regularly used note stays. Repeated use protecting knowledge is intended. A note
-that an active note (one not below its threshold) links to is no candidate: sources and basic concepts are used
+    S ← S · (1 + q (1 − R)),   R = 1 / (1 + t / S),   t = days since the last review
+
+`R`, the retrievability, is 1 right after a review and 1/2 after `S` days; below 1/2 the note is a forget
+candidate. Uses logged before a note's `created` date (an imported history) count; `created` itself restarts the
+clock without growth, so no note is forgotten before it is `S` days old. Uses dated after today are a wrong clock
+and are left out. A review shortly before forgetting raises `S` by half, reviews in quick succession add almost nothing,
+and a note kept again and again rests longer each time: a veto at the threshold gives 1.5 `S`, the next one
+2.25 `S`. With a fixed weight per event, as before, a kept note came back after a quarter of its horizon and the
+same notes were judged over and over.
+
+`S0` is learned per vault and type: the 90th percentile of the gaps between two days of real use of a note
+(create, show, edit or a recall hit in a work session; vetoes and sync edits only say a note was kept or touched),
+since a note still in use is rarely left alone longer. Three biases are kept out. A gap counts only if it starts at
+least 365 days ago, so every gap up to that length had the time to be seen; a young vault would otherwise learn
+from its own short history. Each gap phases in over the following year and is capped at 365 days, so what is learned
+moves smoothly once the log is a year old, and one stray old line cannot carry the vault. Each note weighs one, shared among its gaps, so much used notes do not outvote the
+rest. The creation date counts as the first day only if no use came before it, so an imported history does not
+count as use on the import day. The result is pulled towards 90 days with the weight of 20 notes, a type towards the
+vault value in the same way, and stays within 30 to 365 days. A vault younger than a year therefore rests new notes
+for 90 days, and the growth of `S` with each use and veto does the rest.
+
+A note that an active note (one not below 1/2) links to is no candidate: sources and basic concepts are used
 through the notes that cite them, rarely on their own. Links from faded notes do not count, so a faded chain or
-cycle still fades. `H` and the weights are meant to be calibrated from the usage log.
+cycle still fades.
 
 ## Sleep
 
@@ -95,33 +119,37 @@ The plan is computed without a model; the agent only judges.
 - **Condense:** for each note updated since the last sleep, a search with the eight rarest words of its title
   and cue; a pair is listed when the best other note covers at least 60 % of them and neither links the other
   (linked parts of one topic are not duplicates).
-- **Forget:** the activation candidates, lowest first.
+- **Forget:** the candidates, lowest retrievability first.
 - **Verify:** notes not checked since they last changed, each with three nearest neighbours: a note is checked
   when the snapshot holds its content hash (ignoring `verified:`), or, never snapshotted, when its `verified`
   is not older than `updated`. Edited notes come before never-checked ones. Then the ten most active notes with
   the oldest `verified`.
-- **Dream:** up to `dream_pairs` (5) pairs of notes that are not linked yet, outside the budget so that they are
+- **Dream:** up to five pairs of notes that are not linked yet, outside the budget so that they are
   never crowded out. Seeds are the notes new or changed since the last sleep, then the most active ones (at most
   20); for each, a search with its eight rarest words gives related notes, which are cut by the checks for
   existing links, condense pairs and near-duplicates (coverage), the link limit and locked pairs, and by one
   appearance per note and sleep. Two pairs across projects, two within one (one kind fills up for the other), and
   one far pair: a concept or derivation among the fifty most active against a finding or question of another
   project sharing at most one key word of title and cue, picked by a daily hash. The agent judges each pair and
-  logs a rejection with `sleep unrelated`; the pair is locked while the rejections, weighted like uses in the
-  activation formula, stay above the threshold of `h_unrelated` (90 days). One rejection thus locks for 90 days,
-  a second one after that for much longer. The phase does not make a sleep due, and `sleep done` counts linked,
+  logs a rejection with `sleep unrelated`; the pair then rests like a note, for the vault's `S0` after one
+  rejection and longer after each further one. The phase does not make a sleep due, and `sleep done` counts linked,
   rejected and open pairs. Sleep recombines what is known; without links a note stays a filing-cabinet entry. The
   candidates are cheap and deterministic, the judgement is expensive, hence few pairs, and forgetting rejections
-  with the same power function keeps the memory of them as light as the memory of notes.
-- **Budget:** at most 40 items, filled in the order consolidate, forget (10), condense (5 pairs), verify
-  (unchecked), the rest of forget and condense, verify (active); what does not fit is reported as deferred. The
-  caps only bind while other work waits, so a wave of forget candidates or a large unverified stock cannot
-  starve the inbox, and no budget is left unused while candidates wait.
-- **Self-regulating period.** A sleep is due after seven days, with more than 30 open inbox lines, or as soon
-  as a full plan of work waits (open inbox lines, unchecked notes and forget candidates add up to the budget),
-  but not on the day of the last sleep. The period thus follows the inflow: a quiet week gets one sleep, a busy
-  one several, and the work never piles up beyond one plan plus what arrives before the next sleep. The size of
-  a plan stays fixed, so one sleep stays within what an agent can judge carefully.
+  with the same stability keeps the memory of them as light as the memory of notes.
+- **Budget:** a plan takes as many items as recent sleeps managed, learned from the size of each plan and the
+  items it left undone (an inbox line not booked, a candidate neither archived nor vetoed, a changed note
+  unverified), which `sleep done` logs. It starts at 40. A sleep that left more than a tenth undone sets the next
+  plan to what it did and marks its size as too large; a sleep that finished a full plan lets it grow by a quarter,
+  but only halfway towards a size known to be too large, and once just below it, that limit moves up by one per
+  sleep. The plan thus settles just below what the agent manages instead of swinging around it, and still finds a
+  stronger agent again; it stays within 10 to 200. The plan is filled in the order consolidate, forget and condense
+  (each capped by its share of the waiting work), verify (unchecked), the rest of forget and condense, verify
+  (active); what does not fit is
+  reported as deferred. The caps keep a wave of candidates from starving the other phases, and no budget is left
+  unused while work waits.
+- **Self-regulating period.** A sleep is due after seven days, or as soon as a full plan of work waits (open
+  inbox lines, unchecked notes and forget candidates add up to the budget) and five hours have passed since the
+  last one. The period thus follows the inflow: a quiet week gets one sleep, a busy one several.
 - `sleep done` snapshots only the notes verified in this sleep (and keeps the old hashes of the rest), so a
   deferred note stays in the plan until a sleep verifies it. It expires due inbox lines the plan showed (not
   those put on `--wait` in this sleep) and reports them apart from the settled ones: an expired line is neither
@@ -133,9 +161,9 @@ The plan is computed without a model; the agent only judges.
   left alone and still tells which notes were never checked; no sleep is logged. It syncs the index first, and
   edits only that sync found do not count as use. With `--seed DAYS` it also
   gives every note without use one start use today in `.sb/seeds.tsv`; a sync edit of the same or an earlier day yields to it. Without it, an imported note counts only
-  its `created` date and falls below the threshold at once once it is older than H. The weight
-  w = √((T + 1)/(H + 1)) makes a note fade after T days, and T runs from 30 to DAYS, the least recently updated
-  note first. So an import of 1000 notes with `--seed 365` brings about three forget candidates a day instead
+  its `created` date and is a candidate at once when it is older than `S0`. A seed sets the stability so that
+  the note rests T days, with T running from 30 to DAYS, the least recently updated note first (the file keeps the
+  weight w = √((T + 1)/(H + 1)) of earlier versions, H = 90, 180 for decisions and derivations). So an import of 1000 notes with `--seed 365` brings about three forget candidates a day instead
   of all of them in the first sleep.
 
 ## Review
@@ -144,12 +172,11 @@ The plan is computed without a model; the agent only judges.
 report counts notes by project and type, real use (seeds and calls during a sleep left out; `--since` cuts off
 older events, for example an import that wrote its history as use), hubs, unlinked notes and links between
 projects. Its fading part forecasts per month how many notes reach their threshold without further use and sets
-this against what recent sleeps decided; it warns when candidates pile up faster than sleeps settle them, or
-when vetoes dominate while a vetoed note rests for less than half a horizon (`veto` weight w gives
-w²(H + 1) − 1 days). A map is optional (`--map` to PNG or SVG, extra `review` with numpy and matplotlib):
+this against what recent sleeps decided, names the learned `S0` and budget, and warns when candidates pile up
+faster than sleeps settle them. A map is optional (`--map` to PNG or SVG, extra `review` with numpy and matplotlib):
 an exact t-SNE of an affinity from links and TF-IDF text similarity places related notes close, colour marks
-the project, shape the type, size the number of links, and opacity the activation above the threshold, so
-forget candidates stay faint. Without the extra the report carries a Mermaid mind map instead.
+the project, shape the type, size the number of links, and opacity the days a note has left before it fades,
+so forget candidates stay faint. Without the extra the report carries a Mermaid mind map instead.
 
 ## Rules and integration
 

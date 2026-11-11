@@ -5,9 +5,13 @@ and modelled on human memory.
 
 - **Selective:** only knowledge with rank becomes a note (own results, decisions, derivations, assessed
   sources, open questions). Everything else is a one-line inbox entry.
-- **Sleep:** a pass, weekly or as often as work arrives, consolidates the inbox, merges near-duplicates, forgets, verifies and dreams (proposes new links).
-- **Forgetting:** usage is logged; notes that are no longer used fade into an archive. Nothing is deleted.
-- **Small and fast:** pure Python ≥ 3.10, no dependencies (`tomli` is pulled in below 3.11), SQLite full-text search.
+- **Sleep:** a regular pass consolidates the inbox, merges near-duplicates, forgets, verifies and dreams
+  (proposes new links).
+- **Forgetting:** every use makes a note more stable, the more so the closer it was to fading; notes that are no
+  longer used fade into an archive. Nothing is deleted.
+- **Nothing to tune:** how long notes rest and how much a sleep takes are learned from the vault's own logs.
+- **Review:** `sb review` takes stock of the whole vault, as a report and as a map of the notes.
+- **Small:** pure Python ≥ 3.10 and SQLite full-text search; only the map needs numpy and matplotlib.
 
 It has two parts: the command line tool `sb`, which owns the notes, and a Claude Code plugin, which teaches the
 agent when to call it.
@@ -21,41 +25,34 @@ Give Claude Code this sentence:
 
 The agent then works through these steps:
 
-1. **Prerequisites.** Python ≥ 3.10 (`python3 --version`), git and [pipx](https://pipx.pypa.io). pipx is not
-   part of Python; on macOS `brew install pipx`, on Debian or Ubuntu `sudo apt install pipx`, then
-   `pipx ensurepath`. `sb` is on the `PATH` only in a new shell, so open one (or `exec $SHELL`) before step 2
-   if `sb` is not found.
-2. **Install the CLI.**
+1. **Prerequisites.** Python ≥ 3.10, git and [pipx](https://pipx.pypa.io) (macOS `brew install pipx`, Debian
+   or Ubuntu `sudo apt install pipx`, then `pipx ensurepath` and a new shell).
+2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.2.1`
+   instead keeps this version.
    ```bash
    pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.2.1
    sb --version
    ```
-   This form follows the releases (see [Update and uninstall](#update-and-uninstall)); `@v0.2.1` instead
-   keeps this version.
-3. **Create the vault.** `sb init ~/research-brain` (any folder works; see [Where the vault lives](#where-the-vault-lives)).
-4. **Tell Claude Code where it is.** Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`),
-   with an absolute path (`~` does not work in JSON), e.g. `/home/you/research-brain` or
-   `/Users/you/research-brain`:
+3. **Create the vault.** `sb init ~/research-brain` (any folder works, see [Where the vault lives](#where-the-vault-lives)).
+4. **Tell Claude Code where it is.** Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`)
+   with an absolute path, since `~` does not work in JSON:
    ```json
    { "env": { "SB_VAULT": "/absolute/path/to/research-brain" } }
    ```
-   An `export` in a shell is not enough, because the hooks run in Claude Code's own environment. `sb` must also
-   be on that `PATH`; `pipx ensurepath` takes care of that for new sessions.
-5. **Install the plugin.** From the shell:
+   An `export` in a shell is not enough, because the hooks run in Claude Code's own environment.
+5. **Install the plugin.**
    ```bash
    claude plugin marketplace add BlackRockJL/Scientific-Brain
    claude plugin install scientific-brain@scientific-brain
    ```
-   Inside Claude Code the same is `/plugin marketplace add BlackRockJL/Scientific-Brain` and
+   Inside Claude Code: `/plugin marketplace add BlackRockJL/Scientific-Brain`, then
    `/plugin install scientific-brain@scientific-brain`.
-6. **Restart Claude Code** so that `SB_VAULT`, `PATH` and the plugin take effect. An agent cannot restart
-   Claude Code itself: it asks the user to do so and continues afterwards.
-7. **Verify.** `sb stats` prints the counts of the empty vault. A new session in an empty vault starts without
-   a "Scientific Brain: …" line; that line appears when `sb` or the vault cannot be found, and "sleep due: …"
-   appears once a sleep is due (see [Everyday use](#everyday-use)).
-8. **Optional:** add the snippet from [Everyday use](#everyday-use) to `CLAUDE.md`.
-9. **Note:** self-update is on by default and follows release tags only; `[update] auto = false` in `sb.toml`
-   switches it off (see [Update and uninstall](#update-and-uninstall)).
+6. **Restart Claude Code** so that `SB_VAULT`, `PATH` and the plugin take effect. The agent asks you to do so
+   and continues afterwards.
+7. **Verify.** `sb stats` prints the counts of the empty vault. A new session starts without a
+   "Scientific Brain: …" line; that line appears only when `sb` or the vault cannot be found.
+8. **Optional:** add the snippet from [Everyday use](#everyday-use) to `CLAUDE.md`, and
+   `pipx inject scientific-brain numpy matplotlib` for the map of [Review](#review).
 
 ## Quick start
 
@@ -66,57 +63,27 @@ sb new finding ftcs-stability-limit -p heat --why "own measurement" # note skele
 sb check                                                            # error: unfilled TODO placeholder
 ```
 
-`sb new` writes a skeleton whose fields and sections read `TODO`; the agent, or you, fills them in. Until then
-`sb check` exits with code 1 and names each placeholder with its line number, which is intended: a note counts only once it is
-complete. After filling it in:
+`sb new` writes a skeleton whose fields and sections read `TODO`. Until the agent or you fill them in,
+`sb check` exits with code 1 and names each placeholder: a note counts only once it is complete. Then
+`sb recall ftcs stability` finds it. `sb inbox` lists the open inbox lines; the next sleep promotes, keeps or
+drops them, and a line that waited too long expires (`sb inbox --expired`).
 
-```bash
-sb check
-sb recall ftcs stability
-```
-
-`sb capture` prints only the id of the new inbox line (e.g. `7433e1`); `sb inbox` lists the open lines, and the
-next sleep promotes, keeps or drops them. A line that waited too long expires; `sb sleep done` reports it, and
-`sb inbox --expired` lists those lines.
-
-To import an existing collection of notes:
-
-1. copy the notes into `notes/<project>/` of the vault;
-2. `sb check` and fix what it reports;
-3. `sb sleep baseline --seed 365` (any number of days): the notes are accepted as they are, so the first sleeps
-   verify only what changes from then on. Without a usage history every older note would otherwise be a forget
-   candidate at once; the seed lets them fade one by one over that many days.
-
-`baseline` brings the search index up to date itself, so a vault that was used before the import is no problem.
-
-## Dreaming
-
-People recombine what they know while they sleep; a note that nothing links to stays a filing-cabinet entry.
-So the fifth phase of every sleep offers a few pairs of notes that are not linked yet (at most `dream_pairs`,
-default 5, 0 switches it off; they cost none of the sleep budget). The tool proposes the candidates
-mechanically: related notes from different projects and from the same project, seeded by new, changed and
-active notes, and one deliberately distant pair (a concept or derivation against a finding or question from
-another project that shares at most one key word). Duplicates, linked pairs and notes that already carry the
-maximum number of links are left out, and each note appears in one pair per sleep. The sleeper agent then judges
-every pair on its own and links it only when one note changes how the other is read. There is no quota: no link
-is the normal outcome. A pair judged unrelated (`sb sleep unrelated <a> <b> "reason"`) is locked and returns after
-a cooldown that fades like note activation (`h_unrelated`, default 90 days); a pair rejected again later stays out
-much longer. `sb sleep done` reports how many pairs were linked, rejected or left open.
+To import an existing collection of notes, copy them into `notes/<project>/`, run `sb check` and fix what it
+reports, then `sb sleep baseline --seed 365`. The notes are accepted as they are, and the seed lets them fade
+one by one over that many days instead of all becoming forget candidates at once.
 
 ## Everyday use
 
 Once set up, nothing needs to be done by hand. The plugin brings
 
 - the skills **recall** (look up what is known before technical work), **capture** (store what a task taught),
-  **sleep** (maintenance) and **review** (a read-only inventory with a map of the notes), which Claude Code picks
-  by their descriptions. The map needs numpy and matplotlib: `pipx inject scientific-brain numpy matplotlib`, or
-  the extra `review` of a pip install;
-- a **session-start hook** that stays silent unless `sb` or the vault is missing or a sleep is due. A sleep is
-  due when the vault has notes and has never slept, when the last sleep is more than 7 days ago, or when more
-  than 30 inbox lines are open (also when enough work has piled up since the last sleep);
+  **sleep** (maintenance) and **review** (take stock), which Claude Code picks by their descriptions;
+- a **session-start hook** that stays silent unless `sb` or the vault is missing or a sleep is due: never
+  slept yet, more than 7 days since the last sleep, more than 30 open inbox lines, or a full sleep's worth of
+  work waiting;
 - an **after-edit hook** that checks each note the agent writes and reports schema errors back to it;
-- the **sleeper** agent, which runs a sleep when one is due. Other sessions may keep working in the vault while
-  it sleeps; their use of notes still counts.
+- the **sleeper** agent, which runs a due sleep. Other sessions may keep working in the vault meanwhile; their
+  use of notes still counts.
 
 Skills fire only when the agent judges them relevant. To make it use the brain on every task, add this to the
 `CLAUDE.md` of your home folder or project:
@@ -129,15 +96,44 @@ Skills fire only when the agent judges them relevant. To make it use the brain o
 - When a session starts with "sleep due", run the sleep skill.
 ```
 
+## Review
+
+```bash
+sb review -o review.md --map brain.png
+```
+
+The review reads the vault and changes nothing; it does not even count as use. Ask the agent "how is my brain
+doing?" and the **review** skill runs it and sums it up. The report holds
+
+- warnings: forget candidates piling up faster than sleeps settle them, vetoed notes that come back too soon,
+  overdue inbox lines, notes whose slug prefix belongs to another type, links to missing notes;
+- the inventory by project and type, and the archive by reason;
+- use per project and the most used notes;
+- fading: what sb has learned, the current forget candidates, a forecast per month and what recent sleeps decided;
+- structure: hubs, notes without links, links between projects;
+- upkeep: unverified notes, open questions, the inbox.
+
+The map (`--map`, PNG or SVG) places related notes close to each other, judged by their links and their text.
+Colour marks the project, shape the type, size the number of links, and opacity the relevance: a note used often
+and recently is bright, a forget candidate is faint. Without numpy and matplotlib the report carries a Mermaid
+mind map instead.
+
+`sb review <project>` looks at one project, `--exclude a,b` leaves projects off the map, and `--since
+YYYY-MM-DD` counts only later use, for example after an import that wrote its history as use.
+
+## Dreaming
+
+People recombine what they know while they sleep. So the last phase of every sleep offers a few pairs of notes
+that are not linked yet (at most five): related notes from the same and from
+different projects, and one deliberately distant pair. The sleeper agent links a pair only when one note changes
+how the other is read; no link is the normal outcome. A pair judged unrelated (`sb sleep unrelated <a> <b>
+"reason"`) rests like a note that is not used, and longer once rejected again.
+
 ## Where the vault lives
 
-The vault is a plain folder that you choose, separate from the code, much like a git repository. `sb` finds it
-in this order:
-
-1. the folder named by `SB_VAULT`;
-2. otherwise the nearest folder at or above the current directory that contains an `sb.toml`.
-
-`sb init <folder>` creates this layout:
+The vault is a plain folder that you choose, separate from the code. `sb` uses the folder named by `SB_VAULT`,
+otherwise the nearest folder at or above the current directory that contains an `sb.toml`. `sb init <folder>`
+creates
 
 ```
 sb.toml              projects, source roots, limits
@@ -150,37 +146,30 @@ The vault can be versioned with git; `sb init` writes a `.gitignore` for the sea
 
 ## Update and uninstall
 
-Self-update is on by default (`auto = true` under `[update]` in `sb.toml`): each sleep starts by bringing
-both parts up to the newest release tag `vX.Y.Z` of the repository (never `HEAD`): the CLI with
-`pipx install --force git+<repository>@refs/tags/<tag>` for a pipx install, the plugin with `claude plugin marketplace update`
-and `claude plugin update`. The plugin follows the same switch. The marketplace entry points at the plugin as of
-the current release tag (`ref`), so the plugin, its hooks included, changes only with a release, never with a
-commit on the default branch. A new plugin loads after a restart of Claude Code.
-Only an install without a pin or pinned as `@refs/tags/vX.Y.Z` (the form sb uses itself) follows the releases.
-Any other pin, `@vX.Y.Z` included, and developer (editable) installs are never touched; they only get a hint.
-Without a release tag in the repository only a hint appears. Switch it off with `auto = false` or with
-`SB_NO_UPDATE=1`.
+Each sleep first brings the CLI and the plugin up to the newest release tag `vX.Y.Z` (never `HEAD`). This
+applies to installs without a pin or pinned as `@refs/tags/vX.Y.Z`; any other pin and editable installs only get
+a hint. A new plugin loads after a restart of Claude Code. Switch it off with `auto = false` under `[update]` in
+`sb.toml` or with `SB_NO_UPDATE=1`.
 
 By hand: `pipx install --force git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/<tag>` and
 `/plugin marketplace update scientific-brain` in Claude Code.
 
-A release sets the same version in `pyproject.toml`, `__init__.py`, `plugin/.claude-plugin/plugin.json`, the
-`ref` in `.claude-plugin/marketplace.json` and the install line above (a test checks this), then tags that
-commit `vX.Y.Z` and pushes branch and tag together: `git push --atomic origin main vX.Y.Z`.
-
-A `sb rename` is all or nothing: if any note cannot be read or written, nothing is changed.
-
 To remove it: `/plugin uninstall scientific-brain@scientific-brain`, `pipx uninstall scientific-brain`, and the
-`SB_VAULT` entry in `settings.json`. The vault is a plain folder and stays untouched.
+`SB_VAULT` entry in `settings.json`. The vault stays untouched.
 
 ## More
 
-`sb --help` lists all commands, `sb rules` prints the rules for the agent, and `examples/vault/` holds a small
-demo vault. The design is explained in [docs/design.md](docs/design.md).
+`sb --help` lists all commands, `sb rules` prints the rules for the agent, `examples/vault/` holds a small demo
+vault, and [docs/design.md](docs/design.md) explains the design.
 
 ## Development
 
-`pip install -e '.[test]'` and `pytest`.
+`pip install -e '.[test,review]'` and `pytest`.
+
+A release sets the same version in `pyproject.toml`, `__init__.py`, `plugin/.claude-plugin/plugin.json`, the
+`ref` in `.claude-plugin/marketplace.json` and the install line above (a test checks this), tags that commit
+`vX.Y.Z` and pushes branch and tag together: `git push --atomic origin main vX.Y.Z`. The marketplace entry
+points at the plugin as of that tag, so the plugin changes only with a release.
 
 ## License
 

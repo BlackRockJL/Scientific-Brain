@@ -15,7 +15,7 @@ from . import __version__, inbox, review, sleep, update, usage
 from .index import Index, fts5_available, match_query
 from .links import WHYS, archive_mark, archive_note, backlinks, rename, restore
 from .schema import TYPES, check, project_error, skeleton
-from .vault import DEFAULTS, LOCATIONS, SLUG, SbError, find_vault
+from .vault import DEFAULTS, LIFECYCLE, LIMITS, LOCATIONS, SLUG, SbError, find_vault
 
 SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this file.
 # projects = ["solver", "_general"]          # allowed projects; empty means any
@@ -23,32 +23,11 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 #                                            # file or absolute; the longest folder containing the cwd wins
 # source_roots = ["../project"]              # where `sources:` paths are resolved
 # bibtex = ["refs.bib"]                      # BibTeX files for `ref:` of source notes
-# [limits]
-# title_words = 16
-# body_words = 600
-# links = 8
-# min_coverage = 0.5                         # share of the search terms a match must contain
-# [activation]                               # weights per event, horizon H in days (h, h_<type>)
-# recall = 0.2
-# h = 90
-# h_decision = 180
-# h_unrelated = 90                           # days a dream pair judged unrelated stays out (fades like a note)
-# [lifecycle]
-# inbox_wait_days = 30                       # an open line older than this is due
-# sleep_days = 7                             # "sleep due" after this many days without sleep ...
-# sleep_inbox = 30                           # ... or with more open inbox lines than this ...
-# sleep_gap_hours = 5                        # ... or a full plan of work waits and this many hours have passed
-# new_per_day = 3                            # `new` warns once this many notes were created today
-# sleep_budget = 40                          # notes and inbox lines one sleep plan touches at most
-# forget_budget = 10                         # forget candidates before verify; more only if budget is left
-# condense_pairs = 5                         # near-duplicate pairs before verify; more only if budget is left
-# condense_coverage = 0.6                    # share of a note's title and cue words found in a near-duplicate
-# max_promotion_rate = 0.25                  # `sleep done` warns above this share of promoted inbox lines
-# dream_pairs = 5                            # unlinked note pairs a sleep plan offers for linking; 0 switches it off
 # [index]
 # skip_sections = []                         # headings whose sections stay out of the full-text search
 # [update]
 # auto = true                                # each sleep updates the CLI and the plugin to the latest release tag (false or SB_NO_UPDATE=1 stops it)
+# Nothing else is set here: how long notes rest and how much a sleep takes are learned from the vault's own logs.
 """
 
 
@@ -179,6 +158,7 @@ def cmd_check(a):
     idx.mark_checked((only if only is not None else set(v.scan("notes"))) - bad)
     errs = sum(i.level == "error" for i in issues)
     print(f"checked {n} notes: {errs} errors, {len(issues) - errs} warnings")
+    retired(v)
     return 1 if errs else 0
 
 
@@ -236,6 +216,13 @@ def cmd_restore(a):
     print(f"restored {a.slug} -> {paths[0]}")
 
 
+def retired(v):
+    """Point out sb.toml settings of older versions that are no longer read."""
+    if v.ignored:
+        print(f"note: sb.toml sets {'; '.join(v.ignored)}; these are no longer read (sb learns them from the logs) "
+              "and can be removed")
+
+
 def cmd_stats(a):
     v, idx = _vault_index()
     day = usage.today()
@@ -248,13 +235,16 @@ def cmd_stats(a):
     print(f"inbox: {len(op)} open" + (f", oldest {max(ages)} days" if ages else ""))
     p, t = inbox.promotion(v)
     print("promotion rate: " + (f"{p / t:.0%} ({p} of {t} settled)" if t else "n/a") + (f", {x} expired" if (x := len(inbox.expired(v))) else ""))
-    sc = usage.scores(v, day)
-    act = [x[3] for x in sc]
-    print("activation A: " + (f"min {min(act):.2f}, median {median(act):.2f}, max {max(act):.2f}" if act else "n/a"))
+    s0 = usage.learned(v, day)
+    sc = usage.scores(v, day, s0)
+    st = [x[4] for x in sc]
+    print("stability (days a note rests unused): " + (f"min {min(st):.0f}, median {median(st):.0f}, max {max(st):.0f}" if st else "n/a"))
+    print(f"learned: a new note rests {s0[''] :.0f} days (" + ", ".join(f"{t} {x:.0f}" for t, x in sorted(s0.items()) if t)
+          + f"), a sleep takes {usage.budget(v)} items")
     print(f"forget candidates: {len(usage.forget_candidates(v, day, sc))}")
     print(f"new notes in the last 7 days: {sum((day - x[2]).days < 7 for x in sc)}")
     work = sleep.backlog(v, day)
-    budget = v.cfg["lifecycle"]["sleep_budget"]
+    budget = usage.budget(v)
     print(f"waiting for a sleep: {sum(work.values())} (" + ", ".join(f"{k} {x}" for k, x in work.items())
           + f"), about {-(-sum(work.values()) // budget)} sleeps of {budget}")
     last = usage.last_sleep(v)
@@ -263,6 +253,7 @@ def cmd_stats(a):
         print(f"warning: the sleep marker from {sleep.started(v)} was left behind (more than a day old); 'sb sleep begin' replaces it")
     if (due := usage.sleep_due(v, where["notes"], work["inbox"], day, work)):
         print(due)
+    retired(v)
 
 
 def cmd_sleep(a):
@@ -360,12 +351,12 @@ def cmd_review(a):
 def cmd_rules(a):
     from importlib.resources import files
     try:
-        cfg = find_vault().cfg
+        b = usage.budget(find_vault())
     except SbError as e:
         if not str(e).startswith(("no vault found", "SB_VAULT=")):  # a broken sb.toml is reported
             raise
-        cfg = DEFAULTS  # no vault: the defaults
-    vals = {**cfg["limits"], **cfg["lifecycle"]}
+        b = usage.B0  # no vault: the start value
+    vals = {**LIMITS, **LIFECYCLE, "sleep_budget": b, "sleep_days": usage.WEEK, "forget_budget": b}
     text = files("scientific_brain").joinpath("RULES.md").read_text(encoding="utf-8")
     print(re.sub(r"\{(\w+)\}", lambda m: str(vals.get(m[1], m[0])), text), end="")
 
@@ -448,7 +439,7 @@ def main(argv=None) -> int:
     sp.add_parser("done", help="end the sleep").add_argument("summary")
     sp.add_parser("baseline", help="accept all notes as checked in their current form, e.g. after an import").add_argument(
         "--seed", type=int, metavar="DAYS", help="give notes without use a start use, so they fade one by one within DAYS")
-    cmd("stats", cmd_stats, "counts, activation, inbox, last sleep")
+    cmd("stats", cmd_stats, "counts, stability, learned values, inbox, last sleep")
     sp = cmd("review", cmd_review, "read-only inventory: report and mind map")
     sp.add_argument("project", nargs="?", help="only this project; the map then groups by type")
     sp.add_argument("-o", "--out", help="write the Markdown report to this file")

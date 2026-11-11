@@ -14,40 +14,22 @@ from .vault import SbError, Vault
 TYPES = ("finding", "decision", "derivation", "source", "question", "concept")
 RECENT = 30     # days that count as recent use
 MONTHS = 6      # months of the fading outlook
-WINDOW = 90     # days of sleep history behind the veto rate
+WINDOW = 90     # days of veto and archive history the report shows
 
 
 def uses(v: Vault, since: date | None = None) -> dict:
-    """Current slug -> [(day, weight)]: work and sync events from usage.tsv; seeds and calls during a sleep do not count."""
-    w = {k: v.cfg["activation"][k] for k in ("create", "show", "edit", "recall")}
+    """Current slug -> [(day, strength)]: work and sync events from usage.tsv; seeds and calls during a sleep do not count."""
     cur, out = usage.renamer(v), defaultdict(list)
     for i, (d, caller, kind, slug) in enumerate(v.rows("usage.tsv", 4)):
-        if caller not in ("work", "sync") or kind not in w:
+        if caller not in ("work", "sync") or kind not in usage.STRENGTH or kind == "veto":
             continue
         try:
             day = date.fromisoformat(d)
         except ValueError:
             continue
         if since is None or day >= since:
-            out[cur(slug, i, day)].append((day, w[kind]))
+            out[cur(slug, i, day)].append((day, usage.STRENGTH[kind]))
     return out
-
-
-def fade_day(days: dict, horizon: float, today: date, cap: int = 3650) -> date | None:
-    """First day from today on which A falls below the threshold without further use; None beyond cap days."""
-    th = math.log((horizon + 1) ** -0.5)
-
-    def below(n):
-        return usage.activation(days, today + timedelta(n)) < th - usage.EPS
-    if below(0):
-        return today
-    if not below(cap):
-        return None
-    lo, hi = 0, cap
-    while hi - lo > 1:
-        mid = (lo + hi) // 2
-        lo, hi = (lo, mid) if below(mid) else (mid, hi)
-    return today + timedelta(hi)
 
 
 def _int(x) -> int:
@@ -85,7 +67,7 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
     if project and project not in proj.values():
         raise SbError(f"no notes in project '{project}'")
     sel = {s: n for s, n in notes.items() if not project or proj[s] == project}
-    lc, act = v.cfg["lifecycle"], v.cfg["activation"]
+    lc = v.cfg["lifecycle"]
 
     inbound, dangling, cross, outdeg = Counter(), Counter(), Counter(), {}
     for s, n in notes.items():
@@ -103,28 +85,23 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
     recent = {s: sum(w for d, w in used.get(s, ()) if (day - d).days < RECENT) for s in sel}
     last = {s: max(d for d, _ in used[s]) for s in sel if used.get(s)}
 
-    ev = usage.events(v)
-    cands = {s for s, *_ in usage.forget_candidates(v, day)} & set(sel)
+    sc = {x[0]: x for x in usage.scores(v, day, usage.learned(v, day))}
+    cands = {s for s, *_ in usage.forget_candidates(v, day, list(sc.values()))} & set(sel)
     outlook = Counter()
     end = day + timedelta(days=31 * MONTHS)
-    for s, n in sel.items():
-        if s in cands:
-            continue
-        try:
-            days = ev.get(s) or {date.fromisoformat(n.get("created")): act["create"]}
-        except ValueError:
-            continue
-        f = fade_day(days, usage.horizon(v, n.get("type")), day)
-        if f and f <= end:
-            outlook[f.strftime("%Y-%m")] += 1
+    for s in sel:
+        if s in sc and s not in cands:
+            f = usage.fade_day(sc[s][4], sc[s][5], day)
+            if f <= end:
+                outlook[f.strftime("%Y-%m")] += 1
+    learned, budget = usage.learned(v, day), usage.budget(v)
+    stab = sorted(sc[s][4] for s in sel if s in sc)
 
     sleeps = [r for r in v.rows("sleep.tsv", 8) if r[0][:10] >= (day - timedelta(RECENT)).isoformat()]
     decided = sum(_int(r[3]) + _int(r[5]) for r in sleeps)
     from_day = (day - timedelta(WINDOW)).isoformat()
     vetoes = sum(r[0] >= from_day for r in v.rows("vetoes.tsv", 3))
     faded = sum(n.get("archived_why") == "faded" and str(n.get("archived")) >= from_day for n in arch.values())
-    horizons = sorted({usage.horizon(v, t) for t in TYPES})
-    recur = {h: act["veto"] ** 2 * (h + 1) - 1 for h in horizons}
 
     op = inbox.open_lines(v)
     due = sum(inbox.age(r, day) > lc["inbox_wait_days"] for r in op)
@@ -157,14 +134,9 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
 
     warnings = []
     need = len(cands) + sum(n for m, n in outlook.items() if m <= (day + timedelta(RECENT)).strftime("%Y-%m"))
-    if len(cands) > lc["sleep_budget"] and decided < len(cands):
+    if len(cands) > budget and decided < len(cands):
         warnings.append(f"{len(cands)} forget candidates wait, but the sleeps of the last {RECENT} days decided only {decided}; "
-                        f"raise forget_budget or sleep more often")
-    rate = vetoes / (vetoes + faded) if vetoes + faded else 0
-    short = [h for h, r in recur.items() if r < h / 2]
-    if vetoes + faded >= 10 and rate > 0.5 and short:
-        warnings.append(f"{rate:.0%} of the forget decisions in the last {WINDOW} days were vetoes, and a vetoed note returns after "
-                        f"{recur[short[0]]:.0f} days (horizon {short[0]:g}); raise the veto weight so that kept notes rest longer")
+                        f"sleep more often (the plan grows when sleeps finish it)")
     if lc["inbox_wait_days"] and due:
         warnings.append(f"{due} inbox lines are older than {lc['inbox_wait_days']} days")
     if (mm := prefix_mismatches(sel)):
@@ -179,7 +151,7 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
             "top_used": sorted((s for s in sel if total[s] > 0), key=lambda s: (-total[s], s))[:10],
             "total": total, "recent": recent, "last": last, "titles": {s: n.get("title") for s, n in sel.items()},
             "candidates": len(cands), "outlook": dict(sorted(outlook.items())), "need": need,
-            "horizons": {t: usage.horizon(v, t) for t in TYPES}, "recur": recur, "veto_weight": act["veto"],
+            "learned": learned, "budget": budget, "stability": stab,
             "sleeps": len(sleeps), "decided": decided, "vetoes": vetoes, "faded": faded,
             "inbound": inbound, "outdeg": {s: outdeg[s] for s in sel}, "dangling": dangling,
             "cross": cross if not project else Counter(),
@@ -229,11 +201,13 @@ def report(inv: dict, image: str | None = None) -> str:
         out += ["", "Most used notes:", ""] + [f"{i}. `{s}` – {_num(round(inv['total'][s], 1))}, last {inv['last'][s]}"
                                                for i, s in enumerate(inv["top_used"], 1)]
 
-    hz = Counter(inv["horizons"].values())
+    st, lr = inv["stability"], inv["learned"]
     out += ["", "## Fading", "",
-            "Horizons: " + "; ".join(f"{h:g} days for " + ", ".join(t for t in TYPES if inv["horizons"][t] == h) for h in sorted(hz)) + ".",
-            f"Forget candidates now: {inv['candidates']}. A veto (weight {inv['veto_weight']:g}) keeps a note for "
-            + ", ".join(f"{r:.0f} days (horizon {h:g})" for h, r in inv["recur"].items()) + ".",
+            f"A note rests unused for its stability, which grows with each use or veto, the more the closer it was to "
+            f"fading. Learned from this vault: a new note rests {lr[''] :.0f} days ("
+            + ", ".join(f"{t} {x:.0f}" for t, x in sorted(lr.items()) if t) + "); a sleep takes "
+            f"{inv['budget']} items. Stability now: " + (f"median {median(st):.0f} days, at most {max(st):.0f}." if st else "n/a."),
+            f"Forget candidates now: {inv['candidates']}.",
             f"Sleeps in the last {RECENT} days: {inv['sleeps']}, deciding {inv['decided']} candidates "
             f"(archived or vetoed). In the last {WINDOW} days: {inv['vetoes']} vetoes, {inv['faded']} faded.", ""]
     if inv["outlook"]:
@@ -380,9 +354,9 @@ def draw(v: Vault, inv: dict, path: Path, exclude=()):
     rng = np.random.default_rng(7)
     Y, edges, deg = _layout(np, notes, grp, rng)
     G_ = np.array(grp)
-    act = {s: a - th for s, _, _, a, th in usage.scores(v, inv["day"])}  # height above the forget threshold
-    cand = {s for s, *_ in usage.forget_candidates(v, inv["day"])}
-    up = np.array([act.get(s, 0.0) for s in notes])
+    sc = {x[0]: x for x in usage.scores(v, inv["day"])}
+    cand = {s for s, *_ in usage.forget_candidates(v, inv["day"], list(sc.values()))}
+    up = np.array([max(sc[s][4] - (inv["day"] - sc[s][5]).days, 0.0) if s in sc else 0.0 for s in notes])  # days left before fading
     rel = np.where([s in cand for s in notes], 0.0, np.clip(up / max(np.percentile(up, 95), 1e-9), 0, 1) ** 0.7)
     alpha = 0.12 + 0.83 * rel  # opacity = relevance; forget candidates stay faint
 
@@ -502,7 +476,7 @@ def draw(v: Vault, inv: dict, path: Path, exclude=()):
             + f"  ·  {inv['day']}", color="#9aa4bf", fontsize=13, va="top", zorder=10)
     ax.text(-1.04, 0.948, "closeness = closeness in content (links, text) · size = number of links · shape = note type"
             + (" · colour = type" if by_type else " · colour = project")
-            + " · opacity = relevance (activation; faint = forget candidate)", color=FAINT, fontsize=10.5, va="top", zorder=10)
+            + " · opacity = relevance (days left before fading; faint = forget candidate)", color=FAINT, fontsize=10.5, va="top", zorder=10)
     y0, rows = -0.80, 7
     if not by_type:
         for k, g in enumerate(order):

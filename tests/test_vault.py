@@ -1,7 +1,7 @@
 import pytest
 
 from helpers import make_vault, sb
-from scientific_brain.vault import ParseError, SbError, find_vault, parse_frontmatter
+from scientific_brain.vault import ParseError, SbError, Vault, find_vault, parse_frontmatter
 
 OK = "---\ntitle: A: b\ntype: finding\nsources: [a/b.py, \"c, d\"]\ncreated: 2026-11-08\nwhy: \"quoted\"\nempty:\n---\n\nGist: one.\nstill one.\n\nSecond.\n"
 
@@ -73,8 +73,7 @@ def test_slug_rejects_trailing_newline():
     assert SLUG.match("t4") and not SLUG.match("t4\n")
 
 
-@pytest.mark.parametrize("toml", ["limits = 1", "folder_map = []", 'projects = "heat"', '[limits]\nmin_coverage = "x"',
-                                  "[lifecycle]\nsleep_days = true"])
+@pytest.mark.parametrize("toml", ["folder_map = []", 'projects = "heat"', "index = 1", "[update]\nauto = 1"])
 def test_bad_config_types_give_a_clean_error(tmp_path, toml):
     v = make_vault(tmp_path)
     (v / "sb.toml").write_text(toml + "\n", encoding="utf-8")
@@ -82,18 +81,30 @@ def test_bad_config_types_give_a_clean_error(tmp_path, toml):
     assert code == 2 and "sb.toml" in err and "Traceback" not in err
 
 
-def test_counts_must_be_whole_numbers_and_skip_sections_strings(tmp_path):
-    import pytest
+def test_skip_sections_must_be_strings_and_retired_values_are_not_checked(tmp_path):
     from scientific_brain.vault import SbError, Vault
-    for extra in ("[lifecycle]\nforget_budget = 2.5\n", "[lifecycle]\nsleep_budget = -1\n", "[index]\nskip_sections = 5\n",
-                  "[index]\nskip_sections = [1]\n"):
+    for extra in ("[index]\nskip_sections = 5\n", "[index]\nskip_sections = [1]\n"):
         v = make_vault(tmp_path / str(abs(hash(extra))))
         (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n" + extra)
         with pytest.raises(SbError):
             Vault(v)
-    v = make_vault(tmp_path / "ok")
-    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[index]\nskip_sections = [\"Old\"]\n[lifecycle]\ncondense_coverage = 0.7\n")
-    assert Vault(v).cfg["index"]["skip_sections"] == ["Old"]
+    v = make_vault(tmp_path / "ok")  # values of retired sections are not read, so their types cannot be wrong
+    (v / "sb.toml").write_text((v / "sb.toml").read_text() + "\n[index]\nskip_sections = [\"Old\"]\n[lifecycle]\nforget_budget = 2.5\n"
+                               "sleep_budget = -1\ncondense_coverage = 0.7\n")
+    assert Vault(v).cfg["index"]["skip_sections"] == ["Old"] and Vault(v).cfg["lifecycle"]["condense_coverage"] == 0.6
+
+
+def test_limits_and_lifecycle_stay_in_cfg_filled_from_the_constants(tmp_path, monkeypatch):
+    from scientific_brain import vault as vm
+    cfg = Vault(make_vault(tmp_path)).cfg
+    assert cfg["limits"] == vm.LIMITS == {"title_words": 16, "body_words": 600, "links": 8, "min_coverage": 0.5}
+    assert cfg["lifecycle"] == vm.LIFECYCLE == {"inbox_wait_days": 30, "new_per_day": 3, "condense_coverage": 0.6,
+                                                 "max_promotion_rate": 0.25, "dream_pairs": 5}
+    assert not Vault(make_vault(tmp_path / "b")).ignored
+    monkeypatch.setitem(vm.LIMITS, "links", 2)
+    assert Vault(make_vault(tmp_path / "c")).cfg["limits"]["links"] == 2  # a constant is read when the vault is opened
+    cfg["limits"]["links"] = 99
+    assert vm.LIMITS["links"] == 2  # cfg holds a copy: changing it does not touch the constant
 
 
 def test_self_update_is_on_by_default(tmp_path):

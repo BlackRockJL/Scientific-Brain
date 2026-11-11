@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import pytest
 from helpers import add_note, sb
 
-from scientific_brain import sleep, usage
+from scientific_brain import sleep, usage, vault as vault_mod
 from scientific_brain.vault import Vault
 
 TODAY = date(2026, 11, 8)
@@ -59,7 +59,7 @@ def at(monkeypatch, day):
     monkeypatch.setenv("SB_TODAY", day.isoformat())
 
 
-def test_plan_has_phase_five_with_at_most_dream_pairs(tmp_path):
+def test_plan_has_phase_five_with_at_most_dream_pairs(tmp_path, monkeypatch):
     v = vault(tmp_path)
     for i in range(4):
         pair(v, i, f"across-{i}-a", f"across-{i}-b")
@@ -69,15 +69,13 @@ def test_plan_has_phase_five_with_at_most_dream_pairs(tmp_path):
     assert sum("across projects" in p for p in pairs) == 3 and sum("same project" in p for p in pairs) == 2  # 2 and 2, one filled up
     assert "`sb sleep unrelated <a> <b>" in out and "No link is the normal outcome." in out
     assert f"  {pairs[0][2:].split(' ')[0]} [finding]: " in out  # each pair shows the gist of both notes
-    (tmp_path / "x").mkdir()
-    v2 = vault(tmp_path / "x", "[lifecycle]\ndream_pairs = 2\n")
-    for i in range(4):
-        pair(v2, i, f"across-{i}-a", f"across-{i}-b")
-    assert len(dream(v2)[0]) == 2
+    monkeypatch.setitem(vault_mod.LIFECYCLE, "dream_pairs", 2)  # a constant, not an sb.toml setting
+    assert len(dream(v)[0]) == 2
 
 
-def test_dream_pairs_zero_switches_the_phase_off(tmp_path):
-    v = vault(tmp_path, "[lifecycle]\ndream_pairs = 0\n")
+def test_dream_pairs_zero_switches_the_phase_off(tmp_path, monkeypatch):
+    monkeypatch.setitem(vault_mod.LIFECYCLE, "dream_pairs", 0)
+    v = vault(tmp_path)
     pair(v, 0, "one-a", "one-b")
     fill(v)
     pairs, out = dream(v)
@@ -183,8 +181,10 @@ def test_lock_fades_and_lengthens_with_repeated_rejection(tmp_path, monkeypatch)
     assert (v / ".sb" / "unrelated.tsv").read_text().count("\n") == 2
 
 
-def test_lock_follows_h_unrelated(tmp_path, monkeypatch):
-    v = vault(tmp_path, "[activation]\nh_unrelated = 10\n")
+def test_lock_follows_the_vault_stability(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, "PRIOR", 10.0)  # the vault's initial stability is learned; without a log it is the prior
+    monkeypatch.setattr(usage, "FLOOR", 5.0)
+    v = vault(tmp_path)
     pair(v, 0, "one-a", "one-b")
     fill(v)
     sb(v, "sleep", "unrelated", "one-a", "one-b", "no link")
@@ -267,16 +267,18 @@ def test_done_reports_linked_unrelated_and_open_pairs(tmp_path):
     assert code == 0 and "dream: 1 linked, 1 unrelated, 1 open of 3" in out.splitlines()[-1]
 
 
-def test_done_without_dream_pairs_prints_no_dream_line(tmp_path):
-    v = vault(tmp_path, "[lifecycle]\ndream_pairs = 0\n")
+def test_done_without_dream_pairs_prints_no_dream_line(tmp_path, monkeypatch):
+    monkeypatch.setitem(vault_mod.LIFECYCLE, "dream_pairs", 0)
+    v = vault(tmp_path)
     pair(v, 0, "one-a", "one-b")
     sb(v, "sleep", "begin")
     sb(v, "sleep", "plan")
     assert "dream:" not in sb(v, "sleep", "done", "x")[1]
 
 
-def test_dream_costs_no_budget_and_does_not_make_a_sleep_due(tmp_path):
-    v = vault(tmp_path, "[lifecycle]\nsleep_budget = 5\n")
+def test_dream_costs_no_budget_and_does_not_make_a_sleep_due(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, "B0", 5)
+    v = vault(tmp_path)
     pair(v, 0, "one-a", "one-b")
     fill(v)
     assert "touched: " in dream(v)[1] and dream(v)[1].count(" ~ ") >= 1

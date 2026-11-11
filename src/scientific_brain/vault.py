@@ -17,15 +17,13 @@ WIKI = re.compile(r"\[\[([^\]\n]+)\]\]")
 KEY = re.compile(r"([a-z_][a-z0-9_]*):(?:\s+(.*))?$")
 LOCATIONS = ("notes", "archive")
 DEFAULTS = {"projects": [], "folder_map": {}, "source_roots": [], "bibtex": [],
-            "limits": {"title_words": 16, "body_words": 600, "links": 8, "min_coverage": 0.5},
-            "activation": {"create": 1.0, "show": 1.0, "edit": 1.0, "veto": 0.5, "recall": 0.2,
-                           "h": 90, "h_decision": 180, "h_derivation": 180, "h_unrelated": 90},
-            "lifecycle": {"inbox_wait_days": 30, "sleep_days": 7, "sleep_gap_hours": 5, "sleep_inbox": 30, "new_per_day": 3,
-                          "sleep_budget": 40, "forget_budget": 10, "condense_pairs": 5, "condense_coverage": 0.6,
-                          "max_promotion_rate": 0.25, "dream_pairs": 5},
             "index": {"skip_sections": []},
             "update": {"auto": True}}
-RATES = {"min_coverage", "condense_coverage", "max_promotion_rate"}  # shares; the other limits and lifecycle values are counts
+# Fixed by design, not settable: what a note may hold, how search and condensing match, inbox and promotion limits.
+# What depends on the vault (stability of notes, sleep budget) is learned from its logs, see usage.py.
+LIMITS = {"title_words": 16, "body_words": 600, "links": 8, "min_coverage": 0.5}
+LIFECYCLE = {"inbox_wait_days": 30, "new_per_day": 3, "condense_coverage": 0.6, "max_promotion_rate": 0.25, "dream_pairs": 5}
+RETIRED = ("limits", "activation", "lifecycle")  # sb.toml sections of sb <= 0.2.1; read no more, reported by check
 
 
 class SbError(Exception):
@@ -130,18 +128,16 @@ class Vault:
         for k, default in DEFAULTS.items():
             val = user.get(k, default)
             bad = (not isinstance(val, type(default)) or isinstance(val, bool)
-                   or (k in ("limits", "lifecycle") and not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0
-                                                              for y, x in val.items() if y not in RATES))
                    or (k == "index" and not all(isinstance(x, list) and all(isinstance(s, str) for s in x) for x in val.values()))
                    or (k == "update" and not all(isinstance(x, bool) for x in val.values()))
-                   or (isinstance(default, dict) and k not in ("folder_map", "index", "update") and not all(isinstance(x, (int, float)) and not isinstance(x, bool)
-                                                              for x in val.values()))
                    or (isinstance(default, list) and not all(isinstance(x, str) for x in val))
                    or (k == "folder_map" and not all(isinstance(x, str) for x in val.values())))
             if bad:
                 raise SbError(f"{self.root / 'sb.toml'}: '{k}' has the wrong type or a non-numeric value")
         self.cfg = {k: (DEFAULTS[k] | user.get(k, {}) if isinstance(DEFAULTS[k], dict) else user.get(k, DEFAULTS[k]))
                     for k in DEFAULTS}
+        self.cfg["limits"], self.cfg["lifecycle"] = dict(LIMITS), dict(LIFECYCLE)
+        self.ignored = [f"[{k}]" + (" " + ", ".join(user[k]) if isinstance(user[k], dict) else "") for k in RETIRED if k in user]
         self.sb_dir = self.root / ".sb"
 
     def scan(self, loc: str) -> dict:
@@ -165,7 +161,7 @@ class Vault:
     def rows(self, name: str, n: int) -> list:
         """Lines of .sb/<name> as lists of exactly n fields (missing ones empty); no file means no rows."""
         try:
-            lines = (self.sb_dir / name).read_text(encoding="utf-8").split("\n")
+            lines = (self.sb_dir / name).read_text(encoding="utf-8", errors="replace").split("\n")
         except OSError:
             return []
         return [(r := ln.split("\t", n - 1)) + [""] * (n - len(r)) for ln in lines if ln.strip()]

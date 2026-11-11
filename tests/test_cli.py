@@ -134,12 +134,30 @@ def test_rules_prints_the_contract():
     assert code == 0 and "Scientific Brain" in out and len(out.split()) <= 1200
 
 
-def test_rules_use_the_vault_limits(tmp_path):
+def test_rules_fill_in_the_constants_and_ignore_a_retired_sb_toml(tmp_path):
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text("[limits]\ntitle_words = 20\nbody_words = 700\nlinks = 9\n", encoding="utf-8")
+    (v / "sb.toml").write_text("[limits]\ntitle_words = 20\nbody_words = 700\nlinks = 9\n", encoding="utf-8")  # sb <= 0.2.1: not read
     out = sb(v, "rules")[1]
-    assert "at most 20 words, body at most 700 words, at most 9 links" in out and "{" not in out
+    assert "at most 16 words, body at most 600 words, at most 8 links" in out and "{" not in out
     assert "at most 16 words" in sb("unused", "rules")[1]
+
+
+def test_rules_have_no_open_placeholder_and_stay_within_1200_words(tmp_path):
+    import re
+    from importlib.resources import files
+    raw = files("scientific_brain").joinpath("RULES.md").read_text(encoding="utf-8")
+    assert re.search(r"\{\w+\}", raw)  # the template has placeholders ...
+    for where in (sb("unused", "rules"), sb(make_vault(tmp_path), "rules")):
+        code, out, _ = where
+        assert code == 0 and not re.search(r"\{\w*\}", out) and len(out.split()) <= 1200
+        assert "a week since the last sleep" in out and "at most 40 notes and inbox lines" in out
+
+
+def test_rules_show_the_learned_sleep_budget(tmp_path):
+    v = make_vault(tmp_path)
+    (v / ".sb" / "sleep.tsv").write_text("2026-11-01T12:00\t0\t0\t0\t0\t0\t0\tx\t40\t0\n", encoding="utf-8")  # a full plan, all done
+    out = sb(v, "rules")[1]
+    assert "at most 50 notes and inbox lines" in out and "{" not in out
 
 
 @pytest.mark.parametrize("n", ["0", "-1", "x"])
@@ -165,3 +183,10 @@ def test_init_template_describes_the_update_default(tmp_path):
     sb(root, "init", str(root))
     toml = (root / "sb.toml").read_text()
     assert "# auto = true" in toml and "latest release tag" in toml and "# auto = false" not in toml
+
+
+def test_the_help_of_stats_names_what_it_shows(capsys):
+    from scientific_brain.cli import main
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    assert "counts, stability, learned values, inbox, last sleep" in " ".join(capsys.readouterr().out.split())

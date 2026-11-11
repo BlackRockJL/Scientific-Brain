@@ -118,12 +118,12 @@ def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
     (v.sb_dir / SNAP).write_text("".join(f"{s}\t{h}\n" for s, h in sorted(rows.items())), encoding="utf-8")
     if seed_days is None:
         return new, 0
-    used = usage.events(v, ignore_sync=True)  # edits only the index found are no use
+    used = set(usage.events(v, ignore_sync=True)) | set(usage.seeds(v))  # index-found edits are no use; seeded once is enough
     bare = sorted((str(n.get("updated") or n.get("created") or ""), s) for s, n in notes.items() if s not in used)
     for i, (_, s) in enumerate(bare):
         t = SEED_MIN + (seed_days - SEED_MIN) * (i / (len(bare) - 1) if len(bare) > 1 else 1)
         # one use of weight w fades after T days when w^2 (H + 1) = T + 1
-        v.append(usage.SEEDS, day.isoformat(), s, f"{((t + 1) / (usage.horizon(v, notes[s].get('type')) + 1)) ** 0.5:.6f}")
+        v.append(usage.SEEDS, day.isoformat(), s, f"{((t + 1) / (usage.OLD_H.get(notes[s].get('type'), 90) + 1)) ** 0.5:.6f}")
     return new, len(bare)
 
 
@@ -150,7 +150,7 @@ def words(text) -> list:
 
 
 def plan(v: Vault, idx, day: date) -> str:
-    lc, notes = v.cfg["lifecycle"], load(v)
+    lc, notes, budget = v.cfg["lifecycle"], load(v), usage.budget(v)
     txt = {s: fold(f"{n.get('title')} {n.get('cue')} {n.body}") for s, n in notes.items()}
     df, lim = Counter(w for t in txt.values() for w in set(re.findall(r"\w+", t))), max(3, len(notes) // 2)
 
@@ -166,22 +166,23 @@ def plan(v: Vault, idx, day: date) -> str:
 
     def take(*ids) -> bool:
         """Count the items against the budget; refuse (and note as deferred) when it would overflow."""
-        if len(touched | set(ids)) > lc["sleep_budget"]:
+        if len(touched | set(ids)) > budget:
             deferred.update(ids)
             return False
         touched.update(ids)
         return True
 
-    # filled in the order consolidate, forget, condense (both capped), verify (a), rest of forget and condense, verify (b);
-    # shown in the order of the phases
-    sc, ev = usage.scores(v, day), usage.events(v)
+    # filled in the order consolidate, forget, condense (both capped by their share of the queues), verify (a), rest of
+    # forget and condense, verify (b); shown in the order of the phases
+    s0 = usage.learned(v, day)
+    sc = usage.scores(v, day, s0)
+    last_use = {x[0]: x[5] for x in sc}
     lines = [r for r in sorted(inbox.open_lines(v), key=lambda r: r[1]) if take("inbox:" + r[0])]
     ids = {r[0] for r in lines}
     remember(v, "shown", ids)
     pairs = {frozenset((r[0], h[0][6:])) for r in lines for h in near(keys(r[4]), "inbox:" + r[0], 3, locs=("inbox",))
              if h[0][6:] in ids}
     cands = usage.forget_candidates(v, day, sc)
-    forget = [(s, t, a, th) for s, t, a, th in cands[:lc["forget_budget"]] if take(s)]
     snap, last = snapshot(v), usage.last_sleep(v)
     def fresh(s, n) -> bool:
         """Changed or created since the last sleep (everything before the first)."""
@@ -206,19 +207,25 @@ def plan(v: Vault, idx, day: date) -> str:
             if cov >= lc["condense_coverage"]:
                 found[pair] = max(cov, found.get(pair, 0))
     found_all = sorted(found, key=lambda p: (len({notes[s].folder for s in p}) > 1, -found[p], sorted(p)))
-    dup = [p for p in found_all[:lc["condense_pairs"]] if take(*p)]
     unchecked = sorted((s for s, n in notes.items() if not checked(n, snap)), key=lambda s: notes[s].get("created"), reverse=True)
     changed = sorted(unchecked, key=lambda s: s not in snap)  # edited notes before never-checked ones, newest first
+    room = max(budget - len(touched), 0)
+    queue = len(cands) + 2 * len(found_all) + len(changed)
+    cap_f, cap_c = (-(-room * len(cands) // queue), -(-room * len(found_all) // queue)) if queue else (0, 0)
+    forget = [x for x in cands[:cap_f] if take(x[0])]
+    dup = [p for p in found_all[:cap_c] if take(*p)]
     verify_a = [s for s in changed if take(s)]
     # the caps only keep forget and condense from crowding out the rest; budget left over goes to what they held back
-    forget += [(s, t, a, th) for s, t, a, th in cands[lc["forget_budget"]:] if take(s)]
-    dup += [p for p in found_all[lc["condense_pairs"]:] if take(*p)]
-    hot = sorted((x for x in sc if x[0] not in changed), key=lambda x: -x[3])[:HOT]
+    forget += [x for x in cands[cap_f:] if take(x[0])]
+    dup += [p for p in found_all[cap_c:] if take(*p)]
+    hot = sorted((x for x in sc if x[0] not in changed), key=usage.active)[:HOT]
     verify_b = [x for x in sorted(hot, key=lambda x: notes[x[0]].get("verified") or "")[:10] if take(x[0])]
 
-    dream = dream_pairs(v, notes, sc, day, found, keys, near, cover, fresh)
+    dream = dream_pairs(v, notes, sc, day, found, keys, near, cover, fresh, s0)
     remember(v, "dream", (f"{a}|{b}" for a, b, _ in dream))
-    out = [f"# Sleep plan {day}", f"touched: {len(touched)} of {lc['sleep_budget']} (notes and inbox lines), deferred: {len(deferred - touched)}",
+    remember(v, "work", sorted([f"inbox:{r[0]}" for r in lines] + [f"forget:{x[0]}" for x in forget] + [f"verify:{x}" for x in verify_a]))
+    remember(v, "size", [str(len(touched))])
+    out = [f"# Sleep plan {day}", f"touched: {len(touched)} of {budget} (notes and inbox lines), deferred: {len(deferred - touched)}",
            "", f"## 1. Consolidate: {len(lines)} open inbox lines",
            "Settle each with `sb inbox resolve <id> --note <slug>` (extend or create the note first), `--drop` or `--wait`."]
     for id, d, proj, src, text in lines:
@@ -234,9 +241,8 @@ def plan(v: Vault, idx, day: date) -> str:
         out.append(f"- {a} ~ {b} (coverage {found[p]:.2f}; {notes[a].folder}, {notes[b].folder})")
     out += ["", f"## 3. Forget: {len(forget)} candidates",
             "Archive with `sb archive <slug> --why faded`, or `sb sleep veto <slug> \"reason\"`."]
-    out += [f"- {s} [{t}] A={a:.2f} threshold={th:.2f} last used {max(ev.get(s) or [date.fromisoformat(notes[s].get('created'))])}"
-            for s, t, a, th in forget]
-    out += ["", f"## 4. Verify: {len(verify_a)} new or changed, {len(verify_b)} by activation",
+    out += [f"- {s} [{t}] R={r:.2f} stability {S:.0f} days, last used {last_use.get(s)}" for s, t, r, S in forget]
+    out += ["", f"## 4. Verify: {len(verify_a)} new or changed, {len(verify_b)} most active",
             "Check numbers against the sources and compare with the neighbours; then `sb sleep verified <slug>`."]
     for s in verify_a:
         n = notes[s]
@@ -244,7 +250,7 @@ def plan(v: Vault, idx, day: date) -> str:
         comp = near(keys(f"{n.get('title')} {n.gist}", 2, 8), s, 3, 0.2)
         listed.update(r[0] for r in comp)
         out.append("  compare with: " + ("; ".join(f"{r[0]} ({r[4]})" for r in comp) or "none"))
-    out += [f"- {s} (A={a:.2f}, verified {notes[s].get('verified') or 'never'})" for s, _, _, a, _ in verify_b]
+    out += [f"- {x[0]} (R={x[3]:.2f}, verified {notes[x[0]].get('verified') or 'never'})" for x in verify_b]
     out += ["", f"## 5. Dream: {len(dream)} candidate pairs",
             "For each pair read both notes. Link them only when one changes how the other is read (a shared mechanism, quantity, method "
             "or a contradiction): add the link in both notes under `## Links` with a half-sentence why. If the connection is real but "
@@ -268,25 +274,32 @@ def rejected(v: Vault) -> dict:
     m, out = usage.renames(v), {}
     for d, a, b, _ in v.rows(UNRELATED, 4):
         try:
-            out.setdefault(frozenset((m.get(a, a), m.get(b, b))), []).append(date.fromisoformat(d))
+            day = date.fromisoformat(d)
         except ValueError:
             continue
+        out.setdefault(frozenset((m.get(a, a), m.get(b, b))), []).append(day)
     return out
 
 
-def locked(v: Vault, day: date) -> set:
-    """Pairs whose rejections still reach the threshold; like a note's activation they fade by a power law."""
-    th = usage.threshold(v, "unrelated")
-    return {p for p, ds in rejected(v).items() if usage.activation({d: 1.0 for d in ds}, day) >= th - usage.EPS}
+def locked(v: Vault, day: date, s0: dict | None = None) -> set:
+    """Pairs judged unrelated that still rest: like a note, a pair rests for its stability (the vault's initial one,
+    grown by each further rejection) after its last rejection."""
+    base = (s0 or usage.learned(v, day))[""]
+    out = set()
+    for p, ds in rejected(v).items():
+        S, last = usage.replay({d: 1.0 for d in ds}, None, base)
+        if usage.retrievability(S, (day - last).days) >= 0.5 - usage.EPS:
+            out.add(p)
+    return out
 
 
-def dream_pairs(v: Vault, notes, sc, day, found, keys, near, cover, fresh) -> list:
+def dream_pairs(v: Vault, notes, sc, day, found, keys, near, cover, fresh, s0=None) -> list:
     """(a, b, kind) of unlinked notes worth a look: near pairs across projects and within one, seeded by new, changed and
     active notes, then one far pair. Duplicates, saturated notes, locked pairs stay out; a note appears once."""
     lc, lim = v.cfg["lifecycle"], v.cfg["limits"]["links"]
     if not (want := lc["dream_pairs"]):
         return []
-    lock, used, out = locked(v, day), set(), []
+    lock, used, out = locked(v, day, s0), set(), []
 
     def free(a, b) -> bool:
         return (a != b and a in notes and b in notes and b not in notes[a].targets and a not in notes[b].targets
@@ -303,7 +316,7 @@ def dream_pairs(v: Vault, notes, sc, day, found, keys, near, cover, fresh) -> li
                 k -= 1
 
     new = sorted((s for s, n in notes.items() if fresh(s, n)), key=lambda s: (str(notes[s].get("created")), s), reverse=True)
-    seeds = list(dict.fromkeys(new + [x[0] for x in sorted(sc, key=lambda x: -x[3])]))[:SEEDS]
+    seeds = list(dict.fromkeys(new + [x[0] for x in sorted(sc, key=usage.active)]))[:SEEDS]
     across, within, seen = [], [], set()
     for s in seeds:
         n = notes[s]
@@ -317,7 +330,7 @@ def dream_pairs(v: Vault, notes, sc, day, found, keys, near, cover, fresh) -> li
     pick(across, "across projects", near_n, near_n)  # a kind with too few candidates is filled up by the other
     pick(within, "same project", near_n, near_n)
     if want > 1:
-        top = [x[0] for x in sorted(sc, key=lambda x: -x[3]) if x[1] in ("concept", "derivation") and x[0] in notes][:FAR_POOL]
+        top = [x[0] for x in sorted(sc, key=usage.active) if x[1] in ("concept", "derivation") and x[0] in notes][:FAR_POOL]
         ks = {}  # slug -> title and cue keys
 
         def key_set(s):
@@ -374,17 +387,44 @@ def mark_verified(v: Vault, slugs, day: date) -> list:
     return rels
 
 
+def leftover(v: Vault, day: date, start: date) -> tuple:
+    """(size, left) of the running sleep: the largest plan it printed, and the work items of its plans still waiting
+    (an inbox line not booked in this sleep, a forget candidate neither archived nor vetoed, a changed note unverified).
+    Called before due lines expire, so an expired line counts as left."""
+    work = remembered(v, "work")
+    size = max((int(x) for x in remembered(v, "size") if x.isascii() and x.isdigit()), default=0)
+    if not work:
+        return size, 0
+    m, since = usage.renames(v), start.isoformat()
+    booked = {i for i, d, o in v.rows(inbox.DONE, 3) if d >= since and o != "expired"}
+    cands = {s for s, *_ in usage.forget_candidates(v, day)}
+    notes, snap, done = load(v), snapshot(v), {m.get(s, s) for s in remembered(v, "verified")}
+    left = 0
+    for item in work:
+        kind, _, x = item.partition(":")
+        if kind == "inbox":
+            left += x not in booked
+        elif kind == "forget":
+            left += m.get(x, x) in cands
+        elif kind == "verify":
+            s = m.get(x, x)
+            left += s in notes and s not in done and not checked(notes[s], snap)
+    return size, min(left, size)
+
+
 def finish(v: Vault, summary: str, day: date) -> list:
     """End the sleep: expire due inbox lines the plan showed, snapshot the checked notes, log the sleep; returns the output lines."""
     start = started(v)
     if start is None:
         raise SbError("no sleep is running (sb sleep begin)")
+    planned, left = leftover(v, day, start)
     expired = inbox.expire_inbox(v, day, remembered(v, "shown"), start)
     pairs, since, pend = remembered(v, "dream"), start.isoformat(), pending(v, start)
     booked = [o for _, d, o in v.rows(inbox.DONE, 3) if d >= since and o not in ("wait", "expired")]
     use = Counter(r[2] for _, r in pend)
     prom = sum(o.startswith("note:") for o in booked)
-    v.append("sleep.tsv", usage.stamp(day), len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary)
+    v.append("sleep.tsv", usage.stamp(day), len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary,
+             planned, left)
     release(v, start)
     m, notes = usage.renames(v), load(v)
     snap, done = snapshot(v), {m.get(s, s) for s in remembered(v, "verified")}
@@ -402,6 +442,7 @@ def finish(v: Vault, summary: str, day: date) -> list:
     return ([f"warning: {prom} of {len(booked)} settled inbox lines were promoted ({rate:.0%}, limit {top:.0%}); capture less, or check the rank"]
             * (rate > top and len(booked) >= MIN_PROMOTION)
             + [f"slept {day}: {len(booked)} inbox lines settled ({prom} promoted), {len(expired)} expired, {use['archive']} archived, "
-               f"{use['create']} created, {use['veto']} vetoes"]
+               f"{use['create']} created, {use['veto']} vetoes"
+               + (f"; {left} of {planned} planned items left undone" if left else "")]
             + [f"expired {i}: {sentence(text.get(i, ''), 80)}" for i in expired]
             + [f"dream: {len(linked)} linked, {len(nope)} unrelated, {len(shown) - len(linked) - len(nope)} open of {len(shown)}"] * bool(shown))
