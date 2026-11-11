@@ -9,7 +9,7 @@
         "source": "git-subdir",
         "url": "BlackRockJL/Scientific-Brain",
         "path": "plugin",
-        "ref": "v0.2.1"
+        "ref": "v0.3.0"
       },
       "description": "Lean second brain for research and scientific computing, modelled on human memory"
     }

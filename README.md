@@ -27,10 +27,10 @@ The agent then works through these steps:
 
 1. **Prerequisites.** Python ≥ 3.10, git and [pipx](https://pipx.pypa.io) (macOS `brew install pipx`, Debian
    or Ubuntu `sudo apt install pipx`, then `pipx ensurepath` and a new shell).
-2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.2.1`
+2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.3.0`
    instead keeps this version.
    ```bash
-   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.2.1
+   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.3.0
    sb --version
    ```
 3. **Create the vault.** `sb init ~/research-brain` (any folder works, see [Where the vault lives](#where-the-vault-lives)).
