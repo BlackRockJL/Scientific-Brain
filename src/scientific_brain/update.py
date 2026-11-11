@@ -1,4 +1,4 @@
-"""Opt-in self-update at the start of a sleep: the CLI (git install, newest release tag) and the Claude Code plugin; never raises."""
+"""Self-update at the start of a sleep, on by default (off: [update] auto = false or SB_NO_UPDATE=1): the CLI (git install, newest release tag) and the Claude Code plugin; never raises."""
 from __future__ import annotations
 
 import json

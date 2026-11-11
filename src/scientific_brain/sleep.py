@@ -128,9 +128,9 @@ def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
 
 
 def backlog(v: Vault, day: date) -> dict:
-    """Work waiting for a sleep: open inbox lines, notes not checked since they changed, forget candidates."""
+    """Work waiting for a sleep: undecided inbox lines, notes not checked since they changed, forget candidates."""
     notes, snap = load(v), snapshot(v)
-    return {"inbox": len(inbox.open_lines(v)), "verify": sum(not checked(n, snap) for n in notes.values()),
+    return {"inbox": len(inbox.undecided(v, day)), "verify": sum(not checked(n, snap) for n in notes.values()),
             "forget": len(usage.forget_candidates(v, day))}
 
 
@@ -384,7 +384,7 @@ def finish(v: Vault, summary: str, day: date) -> list:
     booked = [o for _, d, o in v.rows(inbox.DONE, 3) if d >= since and o not in ("wait", "expired")]
     use = Counter(r[2] for _, r in pend)
     prom = sum(o.startswith("note:") for o in booked)
-    v.append("sleep.tsv", day, len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary)
+    v.append("sleep.tsv", usage.stamp(day), len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary)
     release(v, start)
     m, notes = usage.renames(v), load(v)
     snap, done = snapshot(v), {m.get(s, s) for s in remembered(v, "verified")}

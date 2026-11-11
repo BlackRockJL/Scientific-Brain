@@ -36,6 +36,12 @@ def open_lines(v: Vault) -> list:
     return [r for r in lines(v) if fin.get(r[0], ("", "wait"))[1] == "wait"]
 
 
+def undecided(v: Vault, today: date) -> list:
+    """Open lines a sleep still has to decide: never booked, or booked as wait and now past inbox_wait_days."""
+    fin, wait = done(v), v.cfg["lifecycle"]["inbox_wait_days"]
+    return [r for r in open_lines(v) if r[0] not in fin or age(r, today) > wait]
+
+
 def age(row, today: date) -> int:
     try:
         return (today - date.fromisoformat(row[1])).days

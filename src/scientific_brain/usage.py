@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import os
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from .vault import SbError, Vault
 
@@ -14,6 +14,12 @@ SEEDS = "seeds.tsv"  # .sb/ file: date, slug, weight of the start use `sleep bas
 def today() -> date:
     """Today; SB_TODAY (YYYY-MM-DD) overrides it for reproducible runs and tests."""
     return date.fromisoformat(os.environ["SB_TODAY"]) if os.environ.get("SB_TODAY") else date.today()
+
+
+def stamp(day: date) -> str:
+    """day with the current time to the minute; noon under SB_TODAY, so runs stay reproducible."""
+    t = time(12) if os.environ.get("SB_TODAY") else datetime.now().time()
+    return datetime.combine(day, t).isoformat(timespec="minutes")
 
 
 def sleeping(v: Vault, day: date) -> bool:
@@ -135,25 +141,33 @@ def creates_today(v: Vault, today: date) -> int:
     return sum(d == today.isoformat() and c == "work" and k == "create" for d, c, k, _ in v.rows("usage.tsv", 4))
 
 
-def last_sleep(v: Vault) -> date | None:
+def last_sleep_at(v: Vault) -> datetime | None:
+    """End of the last sleep; a row with a date only (before 0.2.1) counts from midnight."""
     for row in reversed(v.rows("sleep.tsv", 3)):
         try:
-            return date.fromisoformat(row[0])
+            return datetime.fromisoformat(row[0])
         except ValueError:
             pass
     return None
 
 
+def last_sleep(v: Vault) -> date | None:
+    at = last_sleep_at(v)
+    return at.date() if at else None
+
+
 def sleep_due(v: Vault, n_notes: int, n_inbox: int, today: date, work: dict | None = None) -> str | None:
     """The 'sleep due' line, or None: last sleep over sleep_days ago (or never, with notes), too many open inbox lines,
-    or, given the waiting work, a full sleep of it at least sleep_gap days after the last sleep. Sleeps thus come as
+    or, given the waiting work, a full sleep of it at least sleep_gap_hours after the last sleep. Sleeps thus come as
     often as work arrives, so no backlog builds up."""
-    lc, last, why = v.cfg["lifecycle"], last_sleep(v), []
+    lc, at, why = v.cfg["lifecycle"], last_sleep_at(v), []
+    last = at.date() if at else None
+    gap = at is None or datetime.fromisoformat(stamp(today)) - at >= timedelta(hours=lc["sleep_gap_hours"])
     if last is None and n_notes:
         why.append("never slept")
     elif last and (today - last).days > lc["sleep_days"]:
         why.append(f"{(today - last).days} days since the last sleep")
-    elif work and (n := sum(work.values())) >= lc["sleep_budget"] and (last is None or (today - last).days >= lc["sleep_gap"]):
+    elif work and (n := sum(work.values())) >= lc["sleep_budget"] and gap:
         why.append(f"{n} items waiting (" + ", ".join(f"{k} {x}" for k, x in work.items() if x) + ")")
     if n_inbox > lc["sleep_inbox"]:
         why.append(f"{n_inbox} open inbox lines")

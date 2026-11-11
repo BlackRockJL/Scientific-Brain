@@ -162,7 +162,7 @@ def test_done_expires_logs_snapshot_and_clears_due(tmp_path):
     assert out.splitlines()[1] == "expired dddddd: stale line"
     assert out.splitlines()[2].startswith("dream: 0 linked, 0 unrelated, ")  # the demo vault has unlinked pairs
     assert tsv(v, "inbox-done.tsv") == [["dddddd", "2026-11-08", "expired"]]
-    assert tsv(v, "sleep.tsv") == [["2026-11-08", "0", "0", "0", "0", "0", "1", "first sleep"]]
+    assert tsv(v, "sleep.tsv") == [["2026-11-08T12:00", "0", "0", "0", "0", "0", "1", "first sleep"]]
     assert [r[0] for r in tsv(v, "snapshot.tsv")] == ["ftcs-stability-limit"] and not sleeping(v).exists()
     assert "sleep due" not in sb(v, "stats")[1] and "sleep due" not in sb(v, "recall", "observed", "order")[1]
 
@@ -345,7 +345,12 @@ def test_sleep_comes_due_when_a_full_plan_of_work_waits(tmp_path):
     out = sb(v, "stats")[1]
     assert "waiting for a sleep: 12 (inbox 3, verify 9, forget 0)" in out
     assert "sleep due" not in out  # the last sleep was today: sleep_gap holds it back
-    (v / ".sb" / "sleep.tsv").write_text((v / ".sb" / "sleep.tsv").read_text().replace("2026-11-08", "2026-11-07"))
+    log = v / ".sb" / "sleep.tsv"  # SB_TODAY runs at noon; sleep_gap_hours = 5
+    log.write_text(log.read_text().replace("2026-11-08T12:00", "2026-11-08T07:01"))
+    assert "sleep due" not in sb(v, "stats")[1]
+    log.write_text(log.read_text().replace("2026-11-08T07:01", "2026-11-08T07:00"))
+    assert "sleep due: 12 items waiting (inbox 3, verify 9)" in sb(v, "stats")[1]
+    log.write_text(log.read_text().replace("2026-11-08T07:00", "2026-11-08"))  # a date-only row counts from midnight
     assert "sleep due: 12 items waiting (inbox 3, verify 9)" in sb(v, "stats")[1]
 
 

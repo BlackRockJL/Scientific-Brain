@@ -36,7 +36,7 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 # inbox_wait_days = 30                       # an open line older than this is due
 # sleep_days = 7                             # "sleep due" after this many days without sleep ...
 # sleep_inbox = 30                           # ... or with more open inbox lines than this ...
-# sleep_gap = 1                              # ... or a full plan of work waits and this many days have passed
+# sleep_gap_hours = 5                        # ... or a full plan of work waits and this many hours have passed
 # new_per_day = 3                            # `new` warns once this many notes were created today
 # sleep_budget = 40                          # notes and inbox lines one sleep plan touches at most
 # forget_budget = 10                         # forget candidates before verify; more only if budget is left
@@ -102,7 +102,7 @@ def cmd_recall(a):
         print(f"+{n} archived matches (use --archive)")
     if not a.inbox and (n := idx.count(terms, ("inbox", "expired"), a.project)):
         print(f"+{n} inbox matches (use --inbox)")
-    if (due := usage.sleep_due(v, idx.n_notes(), idx.n_inbox(), usage.today())):
+    if (due := usage.sleep_due(v, idx.n_notes(), len(inbox.undecided(v, usage.today())), usage.today())):
         print(due)
 
 
@@ -260,7 +260,7 @@ def cmd_stats(a):
     print("last sleep: " + (f"{last} ({(day - last).days} days ago)" if last else "never"))
     if sleep.stale(v, day):
         print(f"warning: the sleep marker from {sleep.started(v)} was left behind (more than a day old); 'sb sleep begin' replaces it")
-    if (due := usage.sleep_due(v, where["notes"], len(op), day, work)):
+    if (due := usage.sleep_due(v, where["notes"], work["inbox"], day, work)):
         print(due)
 
 
@@ -309,7 +309,8 @@ def cmd_hook(a):
                 return 0
             n = sum(r[0] == "notes" for r in idx.counts())
             day = usage.today()
-            if (due := usage.sleep_due(v, n, len(inbox.open_lines(v)), day, sleep.backlog(v, day))):
+            work = sleep.backlog(v, day)
+            if (due := usage.sleep_due(v, n, work["inbox"], day, work)):
                 print(f"Scientific Brain: {due}. Use the sleep skill.")
             return 0
         fp = (json.load(sys.stdin).get("tool_input") or {}).get("file_path")

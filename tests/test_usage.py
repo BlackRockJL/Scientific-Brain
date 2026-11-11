@@ -211,6 +211,14 @@ def test_stats_sleep_due_rules(tmp_path):
     out = sb(v, "stats")[1]
     assert "sleep due: 31 open inbox lines" in out and "inbox: 31 open, oldest 1 days" in out
     assert "sleep due: 31 open inbox lines" in sb(v, "recall", "anything")[1]  # recall ends with the same line
+    with open(v / ".sb" / "inbox-done.tsv", "w", encoding="utf-8") as f:  # a sleep left them all waiting
+        f.write("".join(f"id{i:04d}\t{ago(0)}\twait\n" for i in range(31)))
+    out = sb(v, "stats")[1]
+    assert "sleep due" not in out and "inbox: 31 open" in out and "(inbox 0," in out
+    assert "sleep due" not in sb(v, "recall", "anything")[1]
+    inb = v / ".sb" / "inbox.tsv"  # a waiting line past inbox_wait_days needs a decision again
+    inb.write_text(inb.read_text(encoding="utf-8").replace(f"id0000\t{ago(1)}", f"id0000\t{ago(31)}"), encoding="utf-8")
+    assert "(inbox 1," in sb(v, "stats")[1]
 
 
 def test_stats_on_an_empty_vault_and_new_notes_count(tmp_path):
