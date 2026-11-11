@@ -7,10 +7,11 @@ import os
 import re
 import sys
 from collections import Counter
+from datetime import date
 from pathlib import Path
 from statistics import median
 
-from . import __version__, inbox, sleep, update, usage
+from . import __version__, inbox, review, sleep, update, usage
 from .index import Index, fts5_available, match_query
 from .links import WHYS, archive_mark, archive_note, backlinks, rename, restore
 from .schema import TYPES, check, project_error, skeleton
@@ -333,6 +334,29 @@ def cmd_hook(a):
     return 0
 
 
+def cmd_review(a):
+    v, day = find_vault(), usage.today()
+    try:
+        since = date.fromisoformat(a.since) if a.since else None
+    except ValueError:
+        raise SbError(f"--since must be YYYY-MM-DD, got {a.since!r}")
+    inv = review.collect(v, day, a.project, since, a.top or (6 if a.project else 3))
+    image = None
+    if a.map:
+        m = Path(a.map)
+        review.draw(v, inv, m, set(filter(None, (a.exclude or "").split(","))))
+        image = os.path.relpath(m.resolve(), Path(a.out).resolve().parent) if a.out else str(m)
+    text = review.report(inv, image)
+    if a.out:
+        Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(a.out).write_text(text, encoding="utf-8")
+        print(f"wrote {a.out}" + (f" and {a.map}" if a.map else ""))
+    else:
+        print(text, end="")
+        if a.map:
+            print(f"\nwrote {a.map}")
+
+
 def cmd_rules(a):
     from importlib.resources import files
     try:
@@ -425,6 +449,13 @@ def main(argv=None) -> int:
     sp.add_parser("baseline", help="accept all notes as checked in their current form, e.g. after an import").add_argument(
         "--seed", type=int, metavar="DAYS", help="give notes without use a start use, so they fade one by one within DAYS")
     cmd("stats", cmd_stats, "counts, activation, inbox, last sleep")
+    sp = cmd("review", cmd_review, "read-only inventory: report and mind map")
+    sp.add_argument("project", nargs="?", help="only this project; the map then groups by type")
+    sp.add_argument("-o", "--out", help="write the Markdown report to this file")
+    sp.add_argument("--map", help="draw a map of the notes to this .png or .svg (needs numpy and matplotlib)")
+    sp.add_argument("--exclude", metavar="P1,P2", help="leave these projects off the map")
+    sp.add_argument("--since", metavar="YYYY-MM-DD", help="count use only from this day on")
+    sp.add_argument("--top", type=count, help="notes per group in the Mermaid mind map (default 3, 6 for one project)")
     cmd("rules", cmd_rules, "print the agent rules")
     cmd("hook", cmd_hook, "entry point for Claude Code hooks").add_argument("event", choices=("after-edit", "session-start"))
     a = p.parse_args(argv)

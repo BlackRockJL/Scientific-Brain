@@ -107,8 +107,10 @@ much longer. `sb sleep done` reports how many pairs were linked, rejected or lef
 
 Once set up, nothing needs to be done by hand. The plugin brings
 
-- the skills **recall** (look up what is known before technical work), **capture** (store what a task taught)
-  and **sleep** (maintenance), which Claude Code picks by their descriptions;
+- the skills **recall** (look up what is known before technical work), **capture** (store what a task taught),
+  **sleep** (maintenance) and **review** (a read-only inventory with a map of the notes), which Claude Code picks
+  by their descriptions. The map needs numpy and matplotlib: `pipx inject scientific-brain numpy matplotlib`, or
+  the extra `review` of a pip install;
 - a **session-start hook** that stays silent unless `sb` or the vault is missing or a sleep is due. A sleep is
   due when the vault has notes and has never slept, when the last sleep is more than 7 days ago, or when more
   than 30 inbox lines are open (also when enough work has piled up since the last sleep);

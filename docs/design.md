@@ -138,10 +138,23 @@ The plan is computed without a model; the agent only judges.
   note first. So an import of 1000 notes with `--seed 365` brings about three forget candidates a day instead
   of all of them in the first sleep.
 
+## Review
+
+`sb review` takes stock without changing anything and logs no use, so looking does not keep notes alive. The
+report counts notes by project and type, real use (seeds and calls during a sleep left out; `--since` cuts off
+older events, for example an import that wrote its history as use), hubs, unlinked notes and links between
+projects. Its fading part forecasts per month how many notes reach their threshold without further use and sets
+this against what recent sleeps decided; it warns when candidates pile up faster than sleeps settle them, or
+when vetoes dominate while a vetoed note rests for less than half a horizon (`veto` weight w gives
+w²(H + 1) − 1 days). A map is optional (`--map` to PNG or SVG, extra `review` with numpy and matplotlib):
+an exact t-SNE of an affinity from links and TF-IDF text similarity places related notes close, colour marks
+the project, shape the type, size the number of links, and opacity the activation above the threshold, so
+forget candidates stay faint. Without the extra the report carries a Mermaid mind map instead.
+
 ## Rules and integration
 
 The rules exist once, as package data, and `sb rules` prints them; skills and the sleep agent call it, so
-rules and tool always match. The plugin ships three short skills, the `sleeper` agent and two hooks. The hooks
+rules and tool always match. The plugin ships four short skills, the `sleeper` agent and two hooks. The hooks
 call `sb hook`, which is silent unless an edited note fails `check` or a sleep is due.
 
 ## Related work

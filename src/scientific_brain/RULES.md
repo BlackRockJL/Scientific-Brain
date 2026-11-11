@@ -97,4 +97,4 @@ did not fit as `deferred`; do not work beyond it. A numeric check that needs mor
 - Edit the index; it is a cache and `sb check --rebuild` rebuilds it.
 - Edit `.sb/` files by hand; they are append-only logs that `sb` writes.
 
-`sb stats` shows counts and sleep state.
+`sb stats` shows counts and sleep state, `sb review` an inventory.
