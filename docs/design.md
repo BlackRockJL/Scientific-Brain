@@ -81,8 +81,10 @@ events logged before it to the new name, counted by row, so a name freed by it s
 
 A note becomes a forget candidate when `A` falls below the value of a single full use `H` days ago
 (`H = 90`, 180 for decisions and derivations). A note used once fades after about three months, one used
-twice after about a year, a regularly used note stays. Repeated use protecting knowledge is intended. `H` and
-the weights are meant to be calibrated from the usage log.
+twice after about a year, a regularly used note stays. Repeated use protecting knowledge is intended. A note
+that an active note (one not below its threshold) links to is no candidate: sources and basic concepts are used
+through the notes that cite them, rarely on their own. Links from faded notes do not count, so a faded chain or
+cycle still fades. `H` and the weights are meant to be calibrated from the usage log.
 
 ## Sleep
 

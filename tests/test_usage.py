@@ -62,6 +62,16 @@ def test_horizon_180_for_decision_and_derivation(tmp_path):
     assert set(cands(root3)) == {"fin"}
 
 
+def test_only_links_from_active_notes_protect(tmp_path):
+    names = ("hub", "src", "a", "b", "leaf", "lone")
+    root = vault_with(tmp_path, [(s, "finding") for s in names], [(5, "work", "show", "hub")])
+    links = {"hub": "[[src]]", "a": "[[b]] [[leaf]]", "b": "[[a]]"}
+    for s, body in links.items():
+        add_note(root, s, project="p", extra={"created": OLD, "updated": OLD}, body=f"\nSee {body}.\n")
+    add_note(root, "gone", loc="archive", project="p", extra={"created": OLD, "updated": OLD}, body="\nSee [[lone]].\n")
+    assert set(cands(root)) == {"a", "b", "leaf", "lone"}  # src is used through hub; a faded cycle still fades
+
+
 def test_same_day_events_count_once_and_the_strongest_wins(tmp_path):
     root = vault_with(tmp_path, [("a", "finding")],
                       [(10, "work", "show", "a"), (10, "work", "recall", "a"), (10, "work", "create", "a"),

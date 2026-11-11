@@ -132,9 +132,19 @@ def scores(v: Vault, today: date) -> list:
 
 
 def forget_candidates(v: Vault, today: date, sc=None) -> list:
-    """(slug, type, A, threshold) of notes/ below their threshold, lowest A first."""
+    """(slug, type, A, threshold) of notes/ below their threshold, lowest A first. A note an active note links to is
+    in use through it; links from faded notes protect nothing, so faded chains and cycles still fade."""
     sc = scores(v, today) if sc is None else sc
-    return sorted(((s, t, a, th) for s, t, _, a, th in sc if a < th - EPS), key=lambda r: r[2])
+    low = {s: (t, a, th) for s, t, _, a, th in sc if a < th - EPS}
+    used = set()
+    for rel in v.scan("notes") if low else ():
+        try:
+            n = v.read(rel)
+        except SbError:
+            continue
+        if n.slug not in low:
+            used.update(n.targets)
+    return sorted(((s, t, a, th) for s, (t, a, th) in low.items() if s not in used), key=lambda r: r[2])
 
 
 def creates_today(v: Vault, today: date) -> int:
