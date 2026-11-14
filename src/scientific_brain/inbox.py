@@ -25,7 +25,7 @@ def lines(v: Vault) -> list:
     """Captured lines; an id present twice (a merged or synced file) counts once, its first line."""
     seen, out = set(), []
     for r in v.rows(INBOX, 5):
-        if r[0] and r[0] not in seen:
+        if r[0] and r[4].strip() and r[0] not in seen:  # a row cut off before its text is no capture
             seen.add(r[0])
             out.append(r)
     return out
@@ -60,20 +60,26 @@ def capture(v: Vault, text: str, project: str, source: str, day: date) -> str:
     text = clean(text)
     if not text:
         raise SbError("nothing to capture")
-    ids, seed = {r[0] for r in lines(v)}, day.isoformat() + text
-    n, k = 6, 0
-    h = hashlib.sha1(seed.encode()).hexdigest()
-    while h[:n] in ids:
-        n += 1
-        if n > 40:  # the same text twice on one day: salt the hash
-            n, k = 6, k + 1
-            h = hashlib.sha1(f"{seed}{k}".encode()).hexdigest()
-    v.append(INBOX, h[:n], day.isoformat(), project, source, text)
+    with v.locked():  # no other session may take the same id between the look and the append
+        ids, seed = {r[0] for r in lines(v)}, day.isoformat() + text
+        n, k = 6, 0
+        h = hashlib.sha1(seed.encode()).hexdigest()
+        while h[:n] in ids:
+            n += 1
+            if n > 40:  # the same text twice on one day: salt the hash
+                n, k = 6, k + 1
+                h = hashlib.sha1(f"{seed}{k}".encode()).hexdigest()
+        v.append(INBOX, h[:n], day.isoformat(), project, source, text)
     return h[:n]
 
 
 def resolve(v: Vault, id: str, outcome: str, day: date):
     """Book an open line as note:<slug>, dropped or wait."""
+    with v.locked():  # a parallel resolve of the same line sees this booking
+        _resolve(v, id, outcome, day)
+
+
+def _resolve(v: Vault, id: str, outcome: str, day: date):
     if not any(r[0] == id for r in lines(v)):
         raise SbError(f"no inbox line '{id}'")
     if not any(r[0] == id for r in open_lines(v)) and done(v)[id][1] != "expired":  # expired is not settled

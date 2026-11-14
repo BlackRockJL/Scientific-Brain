@@ -63,9 +63,12 @@ def test_c03_refresh_returns_the_indexed_changed_slugs(tmp_path):
     v = make_vault(tmp_path)
     idx = Index(Vault(v))
     idx.refresh()
-    add_note(v, "fresh-one")
+    p = v / "notes" / "heat" / "scheme-choice.md"
+    p.write_text(p.read_text().replace("second order", "2nd order"), encoding="utf-8")
+    os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 5_000_000_000))
+    add_note(v, "fresh-one")  # new files are imports, not edits
     (v / "notes" / "heat" / "broken.md").write_text("no frontmatter\n", encoding="utf-8")
-    assert idx.refresh() == ["fresh-one"]
+    assert idx.refresh() == ["scheme-choice"]
 
 
 def test_c04_check_changed_reports_an_unindexed_note(tmp_path):

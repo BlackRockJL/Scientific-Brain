@@ -171,15 +171,15 @@ def test_a_line_waiting_from_an_earlier_sleep_is_no_work_until_it_is_due(tmp_pat
     assert left(root) == (4, 4)  # so it never counts as left undone and does not shrink the next plan
 
 
-def test_the_size_is_the_largest_plan_of_the_sleep(tmp_path):
+def test_the_size_and_the_work_are_those_of_the_first_plan_of_the_sleep(tmp_path):
     root = work_vault(tmp_path)
     sb(root, "sleep", "begin")
     sb(root, "sleep", "plan")
     sb(root, "inbox", "resolve", "aaaaaa", "--drop")
     sb(root, "inbox", "resolve", "bbbbbb", "--drop")
     sb(root, "sleep", "plan")  # a second plan lists only the three notes
-    assert sleep.remembered(Vault(root), "size") == {"5", "3"}
-    assert left(root) == (5, 3)  # the largest plan, and the work of both
+    assert sleep.remembered(Vault(root), "size") == {"5"}
+    assert left(root) == (5, 3)  # a later plan shows what is left of the first, or what it deferred
 
 
 def test_leftover_follows_a_rename_during_the_sleep(tmp_path):
@@ -206,7 +206,8 @@ def test_a_duplicate_pair_is_part_of_the_plan_size_but_never_left(tmp_path):
     assert left(root) == (2, 0)
 
 
-def test_finish_logs_size_and_left_and_reports_what_stayed_undone(tmp_path):
+def test_finish_logs_size_and_left_and_reports_what_stayed_undone(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, "B0", 5)  # the five items fill the plan; a smaller plan would say nothing about the budget
     root = work_vault(tmp_path)
     sb(root, "sleep", "begin")
     sb(root, "sleep", "plan")
@@ -214,7 +215,7 @@ def test_finish_logs_size_and_left_and_reports_what_stayed_undone(tmp_path):
     code, out, _ = sb(root, "sleep", "done", "partly")
     assert code == 0 and out.splitlines()[0].endswith("; 4 of 5 planned items left undone")
     assert sleep_rows(root)[-1][8:] == ["5", "4"]
-    assert usage.budget(Vault(root)) == 10  # 5 - 4 = 1 were done: the floor
+    assert usage.budget(Vault(root)) == 10  # 5 - 4 = 1 were done: the floor, and no limit below it
     assert "a sleep takes 10 items" in sb(root, "stats")[1]
     assert "of 10 (notes and inbox lines)" in sb(root, "sleep", "plan")[1]
 
@@ -254,7 +255,7 @@ def test_a_plan_worked_off_completely_enlarges_the_next_budget(tmp_path, monkeyp
 
 
 def test_a_plan_left_half_done_shrinks_the_budget_to_what_was_done(tmp_path, monkeypatch):
-    monkeypatch.setattr(usage, "B0", 20)
+    monkeypatch.setattr(usage, "B0", 5)  # a full plan of the five items
     monkeypatch.setattr(usage, "B_MIN", 1)
     root = work_vault(tmp_path)
     sb(root, "sleep", "begin")

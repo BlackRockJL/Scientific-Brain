@@ -70,7 +70,26 @@ def renamer(v: Vault):
     return current
 
 
-GAIN = 1.0       # a review at R = 1/2 lengthens a note's rest by half: S *= 1 + GAIN * q * (1 - R)
+def follower(v: Vault):
+    """Function (slug, n) -> current slug for a name written when renames.tsv had n rows: it follows only the renames
+    after them, so a freed and reused name keeps its own entries. n None (rows of older versions) follows all renames."""
+    ren, m = [r[:2] for r in v.rows("renames.tsv", 5)], renames(v)
+
+    def current(slug, n=None):
+        if n is None:
+            return m.get(slug, slug)
+        for old, new in ren[n:]:
+            slug = new if slug == old else slug
+        return slug
+    return current
+
+
+def count(x: str):
+    """A row's renames count, or None when it has none (older versions)."""
+    return int(x) if x.isascii() and x.isdigit() else None
+
+
+GAIN = 1.0      # a review at R = 1/2 lengthens a note's rest by half: S *= 1 + GAIN * q * (1 - R)
 RECALL = 0.5     # the first hit of recall is half a review (q); create, show, edit and veto are full ones
 PRIOR, PRIOR_N = 90.0, 20  # initial stability before the log tells, and its weight in notes
 FLOOR, CEIL = 30.0, 365.0  # bounds of the learned initial stability, in days
@@ -80,15 +99,16 @@ B0, B_MIN, B_MAX = 40, 10, 200  # sleep budget: start and bounds
 GAP_HOURS, WEEK = 5, 7  # a full plan of work makes a sleep due GAP_HOURS after the last one; any sleep is due after WEEK days
 
 
-def seeds(v: Vault) -> dict:
-    """Current slug -> (day, weight) of its latest seed, the start use `sleep baseline --seed` gave an imported note."""
-    cur, out = renamer(v), {}
+def seeds(v: Vault, now: date | None = None) -> dict:
+    """Current slug -> (day, weight) of its latest seed, the start use `sleep baseline --seed` gave an imported note.
+    A seed dated after now (default today) is a wrong clock and left out, so it cannot hide an earlier one."""
+    cur, out, now = renamer(v), {}, now or today()
     for i, (d, slug, x) in enumerate(v.rows(SEEDS, 3)):
         try:
             day, wt = date.fromisoformat(d), float(x)
         except ValueError:
             continue
-        if not (math.isfinite(wt) and wt > 0):
+        if not (math.isfinite(wt) and wt > 0) or day > now:
             continue
         s = cur(slug, i, day, 1)
         if s not in out or day >= out[s][0]:
@@ -101,11 +121,11 @@ def seed_rest(weight: float, typ: str) -> float:
     return min(max(min(max(weight, 0.0), 1e3) ** 2 * (OLD_H.get(typ, 90) + 1) - 1, 0.0), 1e6)
 
 
-def events(v: Vault, ignore_sync: bool = False) -> dict:
+def events(v: Vault, ignore_sync: bool = False, now: date | None = None) -> dict:
     """Current slug -> {day: strength}: the strongest review per day; only caller=work and sync count, except veto.
     Sync edits (found by the index) yield to a later or same-day seed of the note; ignore_sync drops them."""
     cur, out = renamer(v), {}
-    seeded = {s: d for s, (d, _) in seeds(v).items()}
+    seeded = {s: d for s, (d, _) in seeds(v, now).items()}
     for i, (d, caller, kind, slug) in enumerate(v.rows("usage.tsv", 4)):
         if kind not in STRENGTH or (caller not in ("work", "sync") and kind != "veto"):
             continue
@@ -127,23 +147,31 @@ def replay(days: dict, start: date | None, s0: float, seed: tuple | None = None)
     an import's history) restarts the clock without growth, so no note is forgotten before it is S days old. Each later review on a new day
     multiplies S by 1 + GAIN * q * (1 - R), R the retrievability at that moment, so a review shortly before forgetting
     counts most and reviews in quick succession add almost nothing (spacing). A later seed restarts the clock and sets
-    S to its rest; after real reviews it only raises S."""
+    S to its rest; after real reviews it only raises S.
+    A half review must not cost what a later one would gain by the longer rest: the states of the histories that skip
+    half reviews since the last full one run along (alt), and each review grows the best of them. So one more use, or a
+    stronger one, never lowers S or R. A state is dropped once the current one is at least as good after any review."""
     items = sorted(days.items())
     timeline = ([(start, "start", 1.0)] if start else []) + [(d, "review", q) for d, q in items]
     if seed:
         timeline.append((seed[0], "seed", seed[1]))
     timeline.sort(key=lambda x: (x[0], x[1] != "start", x[1] == "seed"))
-    S, last, reviewed = None, None, False
+    S, last, reviewed, alt = None, None, False, []
+
+    def grow(s, t, q):
+        return s * (1 + GAIN * q * (1 - retrievability(s, t)))
     for day, kind, x in timeline:
         if S is None:
             S, last, reviewed = max(x if kind == "seed" else s0, 1e-9), day, kind == "review"
         elif kind == "start":
-            last = max(last, day)
+            last, alt = max(last, day), [(s, max(lt, day)) for s, lt in alt]
         elif kind == "seed":
             S, last = max(S if reviewed else 0.0, x, 1e-9), max(last, day)
+            alt = [(max(s, x), max(lt, day)) for s, lt in alt]
         elif day > last:
-            S *= 1 + GAIN * x * (1 - retrievability(S, (day - last).days))
-            last, reviewed = day, True
+            new = max(grow(s, (day - lt).days, x) for s, lt in [(S, last)] + alt)
+            alt = [(s, lt) for s, lt in alt + [(S, last)] if new < grow(s, (day - lt).days, 1.0)]  # not yet outgrown
+            S, last, reviewed = new, day, True
     return (s0, start) if S is None else (max(S, 1e-9), last)
 
 
@@ -153,17 +181,22 @@ def retrievability(S: float, t: float) -> float:
 
 
 def use_days(v: Vault) -> dict:
-    """Current slug -> set of days with real use: create, show, edit or a recall hit in a work session. Vetoes, sync
-    edits and seeds are left out: they say a note was kept or touched, not that it was needed."""
+    """Current slug -> set of days with real use: create, show, edit (also one the index sync found) or a recall hit
+    in a work session. Vetoes and seeds are left out: they say a note was kept, not that it was needed; so is a sync
+    edit on or before a seed of the note, which belongs to its import."""
     cur, out = renamer(v), {}
+    seeded = {s: d for s, (d, _) in seeds(v).items()}
     for i, (d, caller, kind, slug) in enumerate(v.rows("usage.tsv", 4)):
-        if caller != "work" or kind not in ("create", "show", "edit", "recall"):
+        if not (caller == "work" and kind in ("create", "show", "edit", "recall") or caller == "sync" and kind == "edit"):
             continue
         try:
             day = date.fromisoformat(d)
         except ValueError:
             continue
-        out.setdefault(cur(slug, i, day), set()).add(day)
+        s = cur(slug, i, day)
+        if caller == "sync" and day <= seeded.get(s, date.min):
+            continue
+        out.setdefault(s, set()).add(day)
     return out
 
 
@@ -214,7 +247,7 @@ def learned(v: Vault, today: date) -> dict:
 
 def scores(v: Vault, today: date, s0: dict | None = None) -> list:
     """(slug, type, created, R, S, last) for every note in notes/: retrievability today, stability, last review."""
-    ev, sd, out = events(v), seeds(v), []
+    ev, sd, out = events(v, now=today), seeds(v, today), []
     s0 = learned(v, today) if s0 is None else s0
     for rel in v.scan("notes"):
         try:
@@ -263,17 +296,17 @@ def creates_today(v: Vault, today: date) -> int:
 def last_sleep_at(v: Vault, day: date | None = None) -> datetime | None:
     """End of the last sleep as local naive time; a row with a date only (before 0.2.1) counts from midnight, one with a
     zone is converted, one after now (a wrong clock) is skipped."""
-    now = datetime.fromisoformat(stamp(day or today()))
-    for row in reversed(v.rows("sleep.tsv", 3)):
+    now, best = datetime.fromisoformat(stamp(day or today())), None
+    for row in v.rows("sleep.tsv", 3):  # the latest, not the last appended: a clock set back logs out of order
         try:
             at = datetime.fromisoformat(row[0])
         except ValueError:
             continue
         if at.tzinfo:
             at = at.astimezone().replace(tzinfo=None)
-        if at <= now:
-            return at
-    return None
+        if at <= now and (best is None or at > best):
+            best = at
+    return best
 
 
 def last_sleep(v: Vault) -> date | None:
@@ -283,18 +316,20 @@ def last_sleep(v: Vault) -> date | None:
 
 def budget(v: Vault) -> int:
     """Notes and inbox lines a sleep plan takes, learned from the sleeps so far (sleep.tsv: plan size, items left).
-    It starts at B0. A sleep that left more than a tenth of its plan undone sets the next plan to what it did and marks
-    its size as too large. A sleep that finished a full plan lets the plan grow by a quarter, but only halfway towards
-    a size known to be too large; once just below it, that limit moves up by one per sleep, so a stronger agent is
-    found again without a plan far beyond what the last one managed. Sleeps before 0.3 logged no size and count not.
-    Within B_MIN..B_MAX."""
+    It starts at B0. A sleep that left more than a tenth of a full plan undone sets the next plan to what it did and
+    marks its size as too large (a limit under B_MIN says nothing, as the next plan is larger anyway); a plan smaller
+    than the budget says nothing about what the agent manages. A sleep that finished a full plan (at most a tenth
+    left) lets the plan grow by a quarter, but only halfway towards a size known to be too large; once just below it,
+    that limit moves up by one per sleep, so a stronger agent is found again without a plan far beyond what the last
+    one managed. Sleeps before 0.3 logged no size and count not. Within B_MIN..B_MAX."""
     b, high = B0, None
     for r in v.rows("sleep.tsv", 10):
         if not all(x.isascii() and x.isdigit() for x in r[8:10]) or int(r[8]) == 0:
             continue
         size, left = int(r[8]), min(int(r[9]), int(r[8]))
         if left * 10 > size:
-            high, b = size, size - left
+            if size >= b:  # only a plan the budget filled tells the budget is too large
+                high, b = (size if size - left >= B_MIN else None), size - left
         elif size >= b:
             nb = round(b * 1.25)
             if high is not None:

@@ -9,12 +9,14 @@ from itertools import permutations
 
 from . import inbox, usage
 from .index import fold, prepare
-from .links import fm_end
-from .vault import SbError, Vault, clean
+from .links import cr, fm_end
+from .vault import WIKI, SbError, Vault, clean, read_raw, write_atomic
 
 SLEEPING, SNAP = "sleeping", "snapshot.tsv"  # .sb/ files: running sleep (start date, then shown/planned/verified ids), slug+hash of checked notes
+DIGEST = "2"  # snapshot rows of this version hash a note without its ## Links section and with masked link targets
 HOT = 20  # verify (b) looks at the HOT most active notes and takes the oldest verified of them
-UNRELATED = "unrelated.tsv"  # .sb/ file: date, slug, slug, reason of every pair judged unrelated
+UNRELATED = "unrelated.tsv"  # .sb/ file: date, slug, slug, reason, renames so far of every pair judged unrelated
+LISTED = "listed.tsv"  # .sb/ file: date, slug, renames so far of every unchecked note a sleep plan listed under verify
 SEEDS, FAR_POOL = 20, 50  # dream: notes that seed the near pairs; most active concepts and derivations for the far pair
 MIN_PROMOTION = 10  # the promotion warning needs at least this many settled lines to mean anything
 SEED_MIN = 30  # `baseline --seed`: days before the first seeded note can fade
@@ -35,18 +37,38 @@ def stale(v: Vault, day: date) -> bool:
     return (start := started(v)) is not None and (day - start).days > 1
 
 
+def running(v: Vault, day: date) -> bool:
+    """A sleep runs: its marker is there and at most a day old."""
+    return started(v) is not None and not stale(v, day)
+
+
+def due(v: Vault, n_notes: int, day: date, work: dict | None = None) -> str | None:
+    """The 'sleep due' line, or None; None while a sleep runs, since a second sleeper would be refused."""
+    if running(v, day):
+        return None
+    work = backlog(v, day) if work is None else work
+    return usage.sleep_due(v, n_notes, work["inbox"], day, work)
+
+
 def begin(v: Vault, day: date, force=False) -> str:
-    start, msg = started(v), f"sleep started {day}"
-    if start is not None:
-        if not force and not stale(v, day):
-            raise SbError(f"a sleep has been running since {start}; finish it with 'sleep done' or use --force")
-        release(v, start)
-        msg += f" (replaced the sleep from {start})"
-    v.sb_dir.mkdir(exist_ok=True)
-    (v.sb_dir / SLEEPING).write_text(day.isoformat() + "\n", encoding="utf-8")
-    v.append("usage.tsv", day.isoformat(), "sleep", "begin", "-")  # the sleep's usage starts after this row
-    remember(v, "donerows", [len(v.rows(inbox.DONE, 3))])  # bookings and rejections of this sleep follow these rows,
-    remember(v, "unrelrows", [len(v.rows(UNRELATED, 4))])  # so a second sleep on one day does not count the first's
+    with v.locked():
+        start, msg = started(v), f"sleep started {day}"
+        if start is not None:
+            if not force and not stale(v, day):
+                raise SbError(f"a sleep has been running since {start}; finish it with 'sleep done' or use --force")
+            settle(v)  # what the abandoned sleep verified stays verified
+            release(v, start)
+            (v.sb_dir / SLEEPING).unlink(missing_ok=True)
+            msg += f" (replaced the sleep from {start})"
+        v.sb_dir.mkdir(exist_ok=True)
+        try:
+            with open(v.sb_dir / SLEEPING, "x", encoding="utf-8") as f:  # exclusive: of two parallel begins one fails
+                f.write(day.isoformat() + "\n")
+        except FileExistsError:
+            raise SbError("another sleep began meanwhile; finish it with 'sleep done' or use --force") from None
+        v.append("usage.tsv", day.isoformat(), "sleep", "begin", "-")  # the sleep's usage starts after this row
+        remember(v, "donerows", [len(v.rows(inbox.DONE, 3))])  # bookings and rejections of this sleep follow these rows,
+        remember(v, "unrelrows", [len(v.rows(UNRELATED, 5))])  # so a second sleep on one day does not count the first's
     return msg
 
 
@@ -66,8 +88,9 @@ def booked_now(v: Vault, start: date) -> list:
 
 def rejected_now(v: Vault, start: date) -> set:
     """Pairs (frozensets of current slugs) judged unrelated in the running sleep."""
-    m = usage.renames(v)
-    return {frozenset((m.get(a, a), m.get(b, b))) for _, a, b, _ in since_begin(v, UNRELATED, 4, "unrelrows", 0, start)}
+    fol = usage.follower(v)
+    return {frozenset((fol(a, usage.count(n)), fol(b, usage.count(n))))
+            for _, a, b, _, n in since_begin(v, UNRELATED, 5, "unrelrows", 0, start)}
 
 
 def pending(v: Vault, start: date) -> list:
@@ -82,25 +105,44 @@ def pending(v: Vault, start: date) -> list:
 
 
 def release(v: Vault, start: date):
-    """Use logged during the sleep counts again for notes the plan did not list (the sleeper read only those)."""
+    """Give back the use the main session logged during the sleep: recall and show always (the sleeper reads the
+    files), edits of notes the plan did not name (the sleeper edits only those), each with its caller (edits are found
+    by the index sync). Veto counts anyway, create is dated."""
     if start == date.min:
         return
-    m, cur = usage.renames(v), usage.renamer(v)
-    held = {m.get(s, s) for s in remembered(v, "planned") | remembered(v, "verified")}
+    cur = usage.renamer(v)
+    held = remembered_now(v, "planned") | remembered_now(v, "verified")
     for i, (d, _, kind, slug) in pending(v, start):
         try:
             day = date.fromisoformat(d)
         except ValueError:
             continue
-        if kind in ("show", "recall", "edit") and (now := cur(slug, i, day)) not in held:  # veto counts anyway, create is dated
-            v.append("usage.tsv", d, "work", kind, now)
+        if kind in ("show", "recall") or kind == "edit" and cur(slug, i, day) not in held:
+            v.append("usage.tsv", d, "sync" if kind == "edit" else "work", kind, cur(slug, i, day))
+
+
+def text_digest(raw: str, links=False) -> str:
+    """Content hash of a note's text without its frontmatter `verified:` field, which sleep itself sets. Without links
+    (the current form) the ## Links section is left out and link targets are masked, so renames, repaired links and
+    new links found in a dream change nothing; with links, the hash of snapshot rows before DIGEST."""
+    parts = raw.replace("\r\n", "\n").split("\n")
+    end, keep, sec = fm_end(parts), [], ""
+    for i, x in enumerate(parts):
+        if 0 < i < end and x.startswith("verified:"):
+            continue
+        if i > end and not links:
+            sec = x[3:].strip() if x.startswith("## ") else sec
+            if sec == "Links":
+                continue
+            x = WIKI.sub("[[]]", x)
+        keep.append(x)
+    text = "\n".join(keep)
+    return hashlib.sha1((text if links else text.rstrip()).encode()).hexdigest()
 
 
 def digest(n) -> str:
-    """Content hash of a note without its frontmatter `verified:` field, which sleep itself sets."""
-    parts = n.raw.split("\n")
-    end = fm_end(parts)
-    return hashlib.sha1("\n".join(x for i, x in enumerate(parts) if not (0 < i < end and x.startswith("verified:"))).encode()).hexdigest()
+    """Content hash of a note as the snapshot holds it (see text_digest)."""
+    return text_digest(n.raw)
 
 
 def checked(n, snap: dict) -> bool:
@@ -111,40 +153,121 @@ def checked(n, snap: dict) -> bool:
 
 
 def remember(v: Vault, kind: str, ids):
-    """Note in the running sleep's marker which inbox lines a plan showed or which notes were verified."""
+    """Note in the running sleep's marker which inbox lines a plan showed or which notes were verified, each with the
+    number of renames so far, so that a slug follows only the renames made after it."""
     if started(v) is not None:
+        n = len(v.rows("renames.tsv", 5))
         with open(v.sb_dir / SLEEPING, "a", encoding="utf-8") as f:
-            f.writelines(f"{kind}\t{i}\n" for i in ids)
+            f.writelines(f"{kind}\t{i}\t{n}\n" for i in ids)
 
 
-def remembered(v: Vault, kind: str) -> set:
+def remembered_rows(v: Vault, kind: str) -> list:
+    """(id, renames count or None) of the marker lines of kind, in the order they were written."""
     try:
         rows = (v.sb_dir / SLEEPING).read_text(encoding="utf-8").split("\n")[1:]
     except OSError:
-        return set()
-    return {r.split("\t", 1)[1] for r in rows if r.startswith(kind + "\t")}
+        return []
+    return [(r.split("\t")[1], usage.count(r.split("\t")[2]) if r.count("\t") > 1 else None)
+            for r in rows if r.startswith(kind + "\t")]
+
+
+def remembered(v: Vault, kind: str) -> set:
+    return {i for i, _ in remembered_rows(v, kind)}
+
+
+def remembered_now(v: Vault, kind: str, notes=None) -> set:
+    """Current slugs of the marker lines of kind (planned, verified); a line without a count (sb <= 0.3) maps by name."""
+    fol, m = usage.follower(v), usage.renames(v)
+    return {fol(s, n) if n is not None else current(m, notes, s) if notes is not None else m.get(s, s)
+            for s, n in remembered_rows(v, kind)}
 
 
 def snapshot(v: Vault) -> dict:
     """Slug -> content hash at its last check. A row follows only the renames made after it was written (third column:
     rows of renames.tsv then), so a note created under a freed name keeps its own row; an old row without it follows
-    all renames unless the target has a row of its own."""
-    ren, rows = v.rows("renames.tsv", 5), [r for r in v.rows(SNAP, 3) if r[0]]
-    m, own, out = usage.renames(v), {s for s, _, _ in rows}, {}
-    for s, h, c in rows:
-        if c.isascii() and c.isdigit():
-            for old, new, *_ in ren[int(c):]:
-                s = new if s == old else s
+    all renames unless the target has a row of its own. Rows hashed before DIGEST (fourth column) are migrated once."""
+    try:
+        raw = (v.sb_dir / SNAP).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raw = ""
+    rows = [r for r in v.rows(SNAP, 4) if r[0]]
+    fol, m, own, out, old = usage.follower(v), usage.renames(v), {r[0] for r in rows}, {}, set()
+    for s, h, c, ver in rows:
+        if (n := usage.count(c)) is not None:
+            s = fol(s, n)
         elif (t := m.get(s, s)) not in own:
             s = t
         out[s] = h
+        (old.add if ver != DIGEST else old.discard)(s)
+    if old:
+        out = migrate(v, out, old, raw)
+    return out
+
+
+def migrate(v: Vault, snap: dict, old: set, raw: str) -> dict:
+    """Rehash rows of an older digest: a note still as it was checked gets its current hash, a changed one keeps the
+    old hash and stays changed. So a new digest does not put every note back into verify. Written once, unless
+    another process rewrote the snapshot meanwhile (checked under the vault lock)."""
+    out = dict(snap)
+    for loc in ("notes", "archive"):
+        for rel in v.scan(loc):
+            s = rel.rsplit("/", 1)[1][:-3]
+            if s in old:
+                try:
+                    n = v.read(rel)
+                except SbError:
+                    continue
+                if text_digest(n.raw.replace("\r", "\n"), links=True) == snap[s]:  # sb <= 0.3 read a lone CR as a line break
+                    out[s] = digest(n)
+    try:
+        with v.locked():
+            if (v.sb_dir / SNAP).read_text(encoding="utf-8", errors="replace") == raw:
+                save_snapshot(v, out)
+    except OSError:
+        pass  # read-only or gone: migrate again next time
     return out
 
 
 def save_snapshot(v: Vault, rows: dict):
-    """Write the rows with the number of renames they already account for."""
+    """Write the rows with the number of renames they already account for and the digest version."""
     n = len(v.rows("renames.tsv", 5))
-    (v.sb_dir / SNAP).write_text("".join(f"{s}\t{h}\t{n}\n" for s, h in sorted(rows.items())), encoding="utf-8")
+    v.sb_dir.mkdir(exist_ok=True)
+    write_atomic(v.sb_dir / SNAP, "".join(f"{s}\t{h}\t{n}\t{DIGEST}\n" for s, h in sorted(rows.items())))
+
+
+def unverify(v: Vault, slug: str):
+    """The note must be checked again whatever its text: its snapshot row gets a hash no text has. For a note restored
+    from `wrong` (cli restore calls it), whose old row would otherwise still match."""
+    with v.locked():
+        save_snapshot(v, snapshot(v) | {slug: "-"})
+
+
+def settle(v: Vault):
+    """Snapshot what the running (or abandoned) sleep checked: a note verified in it with the hash it had when it was
+    verified (an edit after that is not blessed), unless its row holds its current hash already; a note without row
+    that `checked` accepts, with its current hash. Archived notes keep their row, so a restored note is compared."""
+    notes, m, fol = load(v), usage.renames(v), usage.follower(v)
+    snap, done, at = snapshot(v), remembered_now(v, "verified", notes), {}
+    for item, n in remembered_rows(v, "vhash"):
+        s, _, h = item.rpartition("|")
+        at[fol(s, n) if n is not None else current(m, notes, s)] = h
+    rows = dict(snap)
+    for s, note in notes.items():
+        if s in done and rows.get(s) != digest(note):
+            rows[s] = at.get(s, digest(note))
+        elif s not in snap and checked(note, snap):
+            rows[s] = digest(note)
+    save_snapshot(v, rows)
+
+
+def last_listed(v: Vault, notes: dict) -> dict:
+    """Current slug -> number of the last listed.tsv row that named it under verify after its last `verified:` (a
+    listing that a check followed no longer counts)."""
+    fol, out = usage.follower(v), {}
+    for i, (d, s, n) in enumerate(v.rows(LISTED, 3)):
+        if (s := fol(s, usage.count(n))) in notes and d > str(notes[s].get("verified") or ""):
+            out[s] = i
+    return out
 
 
 def current(m: dict, notes, s: str) -> str:
@@ -160,10 +283,10 @@ def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
         raise SbError("a sleep is running; finish it first (sb sleep done)")
     if seed_days is not None and seed_days <= SEED_MIN:
         raise SbError(f"--seed needs more than {SEED_MIN} days")
-    notes, snap = load(v), snapshot(v)
-    new = sum(not checked(n, snap) for n in notes.values())
-    rows = snap | {s: digest(n) for s, n in notes.items()}  # archived notes keep their row
-    save_snapshot(v, rows)
+    with v.locked():
+        notes, snap = load(v), snapshot(v)
+        new = sum(not checked(n, snap) for n in notes.values())
+        save_snapshot(v, snap | {s: digest(n) for s, n in notes.items()})  # archived notes keep their row
     if seed_days is None:
         return new, 0
     used = set(usage.events(v, ignore_sync=True)) | set(usage.seeds(v))  # index-found edits are no use; seeded once is enough
@@ -263,7 +386,8 @@ def plan(v: Vault, idx, day: date) -> str:
                 found[pair] = max(cov, found.get(pair, 0))
     found_all = sorted(found, key=lambda p: (len({notes[s].folder for s in p}) > 1, -found[p], sorted(p)))
     unchecked = sorted(sorted(s for s, n in notes.items() if not checked(n, snap)), key=lambda s: str(notes[s].get("created")), reverse=True)
-    changed = sorted(unchecked, key=lambda s: s not in snap)  # edited notes before never-checked ones, newest first
+    seen = last_listed(v, notes)  # what earlier plans listed and nobody verified since goes to the back, so nothing starves
+    changed = sorted(unchecked, key=lambda s: (seen.get(s, -1), s not in snap))  # then edited before never-checked, newest first
     room = max(budget - len(touched), 0)
     queue = len(cands) + 2 * len(found_all) + len(changed)
     cap_f, cap_c = (-(-room * len(cands) // queue), -(-room * len(found_all) // queue)) if queue else (0, 0)
@@ -283,8 +407,13 @@ def plan(v: Vault, idx, day: date) -> str:
         rem("dreamed", ["1"])  # also when no pair was found
         rem("dream", (f"{a}|{b}" for a, b, _ in dream))
         rem("dreamkind", (f"{a}|{b}|{k}" for a, b, k in dream))
-    rem("work", sorted([f"inbox:{r[0]}" for r in lines] + [f"forget:{x[0]}" for x in forget] + [f"verify:{x}" for x in verify_a]))
-    rem("size", [str(len(touched))])
+    if not again:  # the first plan sets the sleep's work; a later one only shows what is left of it, or what it deferred
+        rem("work", sorted([f"inbox:{r[0]}" for r in lines] + [f"forget:{x[0]}" for x in forget] + [f"verify:{x}" for x in verify_a]))
+        rem("size", [str(len(touched))])
+    if live:
+        n_ren = len(v.rows("renames.tsv", 5))
+        for s in verify_a:
+            v.append(LISTED, day.isoformat(), s, n_ren)
     out = [f"# Sleep plan {day}", f"touched: {len(touched)} of {budget} (notes and inbox lines), deferred: {len(deferred - touched)}",
            "", f"## 1. Consolidate: {len(lines)} open inbox lines",
            "Settle each with `sb inbox resolve <id> --note <slug>` (extend or create the note first), `--drop` or `--wait`."]
@@ -333,14 +462,14 @@ def sentence(text: str, cap=200) -> str:
 
 
 def rejected(v: Vault) -> dict:
-    """Pair (frozenset of current slugs) -> dates it was judged unrelated; rows follow renames."""
-    m, out = usage.renames(v), {}
-    for d, a, b, _ in v.rows(UNRELATED, 4):
+    """Pair (frozenset of current slugs) -> dates it was judged unrelated; a row follows the renames made after it."""
+    fol, out = usage.follower(v), {}
+    for d, a, b, _, n in v.rows(UNRELATED, 5):
         try:
             day = date.fromisoformat(d)
         except ValueError:
             continue
-        out.setdefault(frozenset((m.get(a, a), m.get(b, b))), []).append(day)
+        out.setdefault(frozenset((fol(a, usage.count(n)), fol(b, usage.count(n)))), []).append(day)
     return out
 
 
@@ -359,11 +488,12 @@ def locked(v: Vault, day: date, s0: dict | None = None) -> set:
 def held_pairs(v: Vault, notes, held) -> list:
     """(a, b, kind) of the pairs the sleep's first plan showed that are still open: both notes there, not linked,
     not judged unrelated in this sleep."""
-    m = usage.renames(v)
+    m, fol = usage.renames(v), usage.follower(v)
     kinds = {p.rsplit("|", 1)[0]: p.rsplit("|", 1)[1] for p in remembered(v, "dreamkind")}
     nope, out = rejected_now(v, started(v)), []
+    counts = dict(remembered_rows(v, "dream"))
     for p in held:
-        a, b = (m.get(s, s) for s in p.split("|"))
+        a, b = (fol(s, counts[p]) if counts.get(p) is not None else m.get(s, s) for s in p.split("|"))
         if (a != b and a in notes and b in notes and b not in notes[a].targets and a not in notes[b].targets
                 and frozenset((a, b)) not in nope):
             out.append((a, b, kinds.get(p, "shown before")))
@@ -446,25 +576,34 @@ def unrelated(v: Vault, a: str, b: str, reason: str, day: date):
         raise SbError("a pair needs two different notes")
     if not clean(reason):
         raise SbError("unrelated needs a reason of one sentence")
-    v.append(UNRELATED, day.isoformat(), *sorted((a, b)), reason)
+    v.append(UNRELATED, day.isoformat(), *sorted((a, b)), reason, len(v.rows("renames.tsv", 5)))
 
 
 def mark_verified(v: Vault, slugs, day: date) -> list:
-    """Set verified: <day> in the frontmatter, leave updated alone; returns the paths."""
+    """Set verified: <day> in the frontmatter, leave updated alone and the line endings as they are; remember the
+    hash each note has now, so an edit after the check is not taken as checked; returns the paths."""
     rels = [v.find(s, ("notes",)) or "" for s in slugs]
     if (bad := [s for s, r in zip(slugs, rels) if not r]):
         raise SbError(f"no note '{bad[0]}' in notes/")
-    texts = [(v.root / rel).read_text(encoding="utf-8").split("\n") for rel in rels]
-    for rel, parts in zip(rels, texts):
-        if not fm_end(parts):
-            raise SbError(f"{rel}: the frontmatter is not closed; fix the note first")
-    for rel, parts in zip(rels, texts):
-        end = fm_end(parts)
-        i = next((i for i in range(1, end) if parts[i].startswith("verified:")), None)
-        lo, hi = (end, end) if i is None else (i, i + 1)
-        parts[lo:hi] = [f"verified: {day}"]
-        (v.root / rel).write_text("\n".join(parts), encoding="utf-8")
-    remember(v, "verified", slugs)
+    with v.locked():
+        texts = []
+        for rel in rels:
+            try:
+                texts.append(read_raw(v.root / rel).split("\n"))
+            except SbError as e:
+                raise SbError(f"{e}; nothing was verified") from e
+        for rel, parts in zip(rels, texts):
+            if not fm_end(parts):
+                raise SbError(f"{rel}: the frontmatter is not closed; fix the note first")
+        for s, rel, parts in zip(slugs, rels, texts):
+            end = fm_end(parts)
+            i = next((i for i in range(1, end) if parts[i].startswith("verified:")), None)
+            lo, hi = (end, end) if i is None else (i, i + 1)
+            parts[lo:hi] = [f"verified: {day}" + cr(parts)]
+            text = "\n".join(parts)
+            write_atomic(v.root / rel, text)
+            remember(v, "verified", [s])
+            remember(v, "vhash", [f"{s}|{text_digest(text)}"])
     return rels
 
 
@@ -472,54 +611,51 @@ def leftover(v: Vault, day: date, start: date) -> tuple:
     """(size, left) of the running sleep: the largest plan it printed, and the work items of its plans still waiting
     (an inbox line not booked in this sleep, a forget candidate neither archived nor vetoed, a changed note unverified).
     Called before due lines expire, so an expired line counts as left."""
-    work = remembered(v, "work")
+    work = dict(remembered_rows(v, "work"))
     size = max((int(x) for x in remembered(v, "size") if x.isascii() and x.isdigit()), default=0)
     if not work:
         return size, 0
-    m = usage.renames(v)
+    m, fol = usage.renames(v), usage.follower(v)
     booked = {i for i, d, o in booked_now(v, start) if o != "expired"}
     cands = {s for s, *_ in usage.forget_candidates(v, day)}
     notes, snap = load(v), snapshot(v)
-    done = {current(m, notes, s) for s in remembered(v, "verified")}
+    done = remembered_now(v, "verified", notes)
     left = 0
-    for item in work:
+    for item, n in work.items():
         kind, _, x = item.partition(":")
+        now = fol(x, n) if n is not None else current(m, notes, x)
         if kind == "inbox":
             left += x not in booked
         elif kind == "forget":
-            left += current(m, notes, x) in cands
+            left += now in cands
         elif kind == "verify":
-            s = current(m, notes, x)
-            left += s in notes and s not in done and not checked(notes[s], snap)
+            left += now in notes and now not in done and not checked(notes[now], snap)
     return size, min(left, size)
 
 
 def finish(v: Vault, summary: str, day: date) -> list:
     """End the sleep: expire due inbox lines the plan showed, snapshot the checked notes, log the sleep; returns the output lines."""
-    start = started(v)
-    if start is None:
-        raise SbError("no sleep is running (sb sleep begin)")
-    planned, left = leftover(v, day, start)
-    expired = inbox.expire_inbox(v, day, remembered(v, "shown"))
-    pairs, pend = remembered(v, "dream"), pending(v, start)
-    booked = [o for _, d, o in booked_now(v, start) if o not in ("wait", "expired")]
-    use = Counter(r[2] for _, r in pend)
-    prom = sum(o.startswith("note:") for o in booked)
-    v.append("sleep.tsv", usage.stamp(day), len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary,
-             planned, left)
-    release(v, start)
-    m, notes = usage.renames(v), load(v)
-    snap, done = snapshot(v), {current(m, notes, s) for s in remembered(v, "verified")}
-    rows = dict(snap)  # archived notes keep their row, so a restored note is compared, not trusted
-    for s, n in notes.items():  # verified in this sleep, or checked before any snapshot: the current hash
-        if s in done or (s not in snap and checked(n, snap)):
-            rows[s] = digest(n)
-    save_snapshot(v, rows)
-    (v.sb_dir / SLEEPING).unlink()
+    with v.locked():
+        start = started(v)
+        if start is None:
+            raise SbError("no sleep is running (sb sleep begin)")
+        planned, left = leftover(v, day, start)
+        expired = inbox.expire_inbox(v, day, remembered(v, "shown"))
+        pairs, pend = dict(remembered_rows(v, "dream")), pending(v, start)
+        booked = [o for _, d, o in booked_now(v, start) if o not in ("wait", "expired")]
+        use = Counter(r[2] for _, r in pend)
+        prom = sum(o.startswith("note:") for o in booked)
+        v.append("sleep.tsv", usage.stamp(day), len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary,
+                 planned, left)
+        release(v, start)
+        settle(v)
+        m, fol, notes = usage.renames(v), usage.follower(v), load(v)
+        nope = rejected_now(v, start)
+        (v.sb_dir / SLEEPING).unlink()
     rate, top = prom / len(booked) if booked else 0, v.cfg["lifecycle"]["max_promotion_rate"]
-    shown = {frozenset(m.get(s, s) for s in p.split("|")) for p in pairs}
+    shown = {frozenset(fol(s, n) if n is not None else m.get(s, s) for s in p.split("|")) for p, n in pairs.items()}
     linked = {p for p in shown if len(p) == 2 and all(s in notes for s in p) and any(b in notes[a].targets for a, b in permutations(p))}
-    nope = rejected_now(v, start) & (shown - linked)
+    nope &= shown - linked
     text = {r[0]: r[4] for r in inbox.lines(v)}
     return ([f"warning: {prom} of {len(booked)} settled inbox lines were promoted ({rate:.0%}, limit {top:.0%}); capture less, or check the rank"]
             * (rate > top and len(booked) >= MIN_PROMOTION)

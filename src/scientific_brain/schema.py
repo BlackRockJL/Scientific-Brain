@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 
@@ -61,6 +62,8 @@ def check(v: Vault, only=None):
     for f in v.cfg["bibtex"]:
         if not (v.root / f).is_file():
             add("warning", "sb.toml:1", f"BibTeX file not found: {f}")
+    for rel in v.temp_files() if only is None else ():
+        add("warning", f"{rel}:1", "temporary file of an interrupted write; delete it")
     files = {loc: sorted(v.scan(loc)) for loc in LOCATIONS}
     slugs: dict[str, list[str]] = {}
     for loc in LOCATIONS:
@@ -114,7 +117,7 @@ def check(v: Vault, only=None):
         for k in ("created", "updated", "verified", "archived"):
             if n.get(k) and not _date_ok(n.get(k)):
                 err(k, f"'{k}' must be a date YYYY-MM-DD")
-        if n.get("project") and n.get("project") != n.folder:
+        if n.get("project") and unicodedata.normalize("NFC", str(n.get("project"))) != n.folder:
             err("project", f"project '{n.get('project')}' does not match folder '{n.folder}'")
         if n.get("project") and (m := project_error(v, n.get("project"))):
             err("project", m)
@@ -146,7 +149,7 @@ def check(v: Vault, only=None):
             if roots and p != "TODO" and "://" not in p and not any((r / p).exists() for r in roots):
                 add("warning", at("sources"), f"source path not found in source_roots: {p}")
         ref = n.get("ref")
-        if ref:
+        if ref and ref != "TODO":  # the placeholder is reported once, as such (like sources: [TODO])
             if not (DOI.match(ref) or ref in bib):
                 err("ref", f"unknown citation key '{ref}' (not in the BibTeX files, not a DOI)")
             other = next((r for r in holders.get(ref, ()) if r != rel), None) if only is not None else None

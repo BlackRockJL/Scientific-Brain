@@ -32,7 +32,10 @@ def test_new_creates_skeleton_per_type_and_check_demands_filling(tmp_path):
 
 def test_new_shows_similar_notes_and_prevents_collisions(tmp_path):
     v = make_vault(tmp_path)
-    code, out, _ = sb(v, "new", "finding", "ftcs-step-size", "-p", "heat", "--why", "stability of the explicit scheme")
+    code, out, err = sb(v, "new", "finding", "ftcs-step-size", "-p", "heat", "--why", "stability of the explicit scheme")
+    assert code == 2 and "similar notes" in out and "ftcs-stability-limit" in out and "not written" in err  # E1: nothing yet
+    assert not (v / "notes" / "heat" / "ftcs-step-size.md").exists()
+    code, out, _ = sb(v, "new", "finding", "ftcs-step-size", "-p", "heat", "--why", "stability of the explicit scheme", "--anyway")
     assert code == 0 and "similar notes" in out and "ftcs-stability-limit" in out
     before = (v / "notes" / "heat" / "ftcs-step-size.md").read_text()
     code, _, err = sb(v, "new", "finding", "ftcs-step-size", "-p", "heat", "--why", "again")

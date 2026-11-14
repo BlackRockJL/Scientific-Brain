@@ -69,6 +69,12 @@ def test_condense_finds_planted_pair_and_prefers_same_project(tmp_path):
     assert "- backward-euler-damping ~ implicit-euler-damping (coverage 1.00; heat, heat)" in out
 
 
+def add_sentence(p):
+    """Edit the body: one more sentence before the ## Links section, which the content hash leaves out."""
+    t = p.read_text()
+    p.write_text(t.replace("\n## Links", "\nOne more sentence.\n\n## Links", 1) if "\n## Links" in t else t + "\nOne more sentence.\n")
+
+
 def test_verify_a_keeps_unverified_notes_until_a_sleep_verifies_them(tmp_path):
     v = make_vault(tmp_path)
     assert "## 4. Verify: 7 new or changed" in sb(v, "sleep", "plan")[1]
@@ -80,7 +86,7 @@ def test_verify_a_keeps_unverified_notes_until_a_sleep_verifies_them(tmp_path):
     assert "## 4. Verify: 5 new or changed" in out  # what the sleep did not verify stays listed
     assert "scheme-choice (new)" not in out and "scheme-choice (changed)" not in out
     p = v / "notes" / "heat" / "scheme-choice.md"
-    p.write_text(p.read_text() + "\nOne more sentence.\n")
+    add_sentence(p)
     add_note(v, "fresh-note", title="Fresh note about meshes", cue="when meshes change")
     out = sb(v, "sleep", "plan")[1]
     assert "- scheme-choice (changed) [decision, heat]" in out and "- fresh-note (new)" in out
@@ -270,7 +276,7 @@ def test_an_edited_note_stays_unchecked_through_rename(tmp_path):
     v = make_vault(tmp_path)
     baseline(v)
     p = v / "notes" / "heat" / "scheme-choice.md"
-    p.write_text(p.read_text() + "\nOne more sentence.\n")
+    add_sentence(p)
     assert sb(v, "rename", "scheme-choice", "time-scheme-choice")[0] == 0
     sb(v, "sleep", "begin")
     sb(v, "sleep", "done", "nothing verified")
@@ -286,7 +292,7 @@ def test_archive_and_restore_keep_the_snapshot_row(tmp_path):
     assert sb(v, "restore", "scheme-choice")[0] == 0
     assert "scheme-choice" not in verify_a(v)  # unchanged since its check
     p = v / "notes" / "heat" / "scheme-choice.md"
-    p.write_text(p.read_text() + "\nOne more sentence.\n")
+    add_sentence(p)
     assert "- scheme-choice (changed)" in verify_a(v)
 
 
@@ -294,7 +300,7 @@ def test_a_second_sleep_on_the_same_day_does_not_trust_the_first(tmp_path):
     v = make_vault(tmp_path)
     baseline(v)
     p = v / "notes" / "heat" / "scheme-choice.md"
-    p.write_text(p.read_text() + "\nOne more sentence.\n")  # verified today, edited afterwards
+    add_sentence(p)  # verified today, edited afterwards
     sb(v, "sleep", "begin")
     sb(v, "sleep", "done", "second, nothing verified")
     assert "- scheme-choice (changed)" in verify_a(v)
@@ -308,7 +314,7 @@ def test_sleep_baseline_accepts_current_notes_without_touching_verified(tmp_path
     assert code == 0 and "(7 were unchecked)" in out
     assert p.read_text() == before and not (v / ".sb" / "sleep.tsv").exists()  # no verified date, no sleep logged
     assert "(new)" not in verify_a(v) and "(changed)" not in verify_a(v)
-    p.write_text(before + "\nOne more sentence.\n")
+    add_sentence(p)
     assert "- scheme-choice (changed)" in verify_a(v)  # later edits are checked again
     sb(v, "sleep", "begin")
     code, _, err = sb(v, "sleep", "baseline")
@@ -473,15 +479,18 @@ def test_use_during_a_sleep_survives_for_notes_outside_the_plan(tmp_path):
     v = make_vault(tmp_path)
     sb(v, "sleep", "begin")
     sb(v, "sleep", "plan")
-    inside = planned(v)[0]
+    inside, edited = planned(v)[:2]
     add_note(v, "late-note")  # a parallel session writes it after the plan was made
     sb(v, "show", "late-note")
     sb(v, "show", inside)
+    add_sentence(next((v / "notes").glob(f"*/{edited}.md")))
+    sb(v, "check")  # the index sync finds the edit
     ev = lambda s: usage.events(Vault(v)).get(s, {})  # noqa: E731
     assert TODAY not in ev("late-note") and TODAY not in ev(inside)  # nothing counts while the sleep runs
     sb(v, "sleep", "done", "s")
     assert ev("late-note")[TODAY] == 1.0  # the plan did not name it, so nobody but the parallel session read it
-    assert TODAY not in ev(inside)  # the sleeper read this one
+    assert ev(inside)[TODAY] == 1.0  # show and recall are the main session's (the sleeper reads files), planned or not
+    assert TODAY not in ev(edited)  # an edit of a note the plan names is the sleeper's
 
 
 def test_the_second_sleep_of_a_day_does_not_release_the_first_ones_use(tmp_path):
@@ -489,7 +498,8 @@ def test_the_second_sleep_of_a_day_does_not_release_the_first_ones_use(tmp_path)
     sb(v, "sleep", "begin")
     sb(v, "sleep", "plan")
     inside = planned(v)[0]
-    sb(v, "show", inside)
+    add_sentence(next((v / "notes").glob(f"*/{inside}.md")))
+    sb(v, "check")  # the sleeper's edit of a planned note, found by the index sync
     sb(v, "sleep", "done", "first")
     sb(v, "sleep", "begin")
     sb(v, "sleep", "done", "second, no plan")

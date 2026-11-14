@@ -15,7 +15,7 @@ not hold instructions about how you should work; those belong in your own memory
 - What the brain says is not re-derived and not asked again. "no match" means nothing is known about these terms.
 - `+N archived matches` means older, forgotten notes also match; `--archive` shows them. `+N inbox matches`
   means unsorted raw lines match; `--inbox` shows only those.
-- The first hit of `recall`, notes `show` opens and notes you edit count as used; use keeps a note from
+- The first hit of `recall`, notes `show` opens, edits and `restore` count as used; use keeps a note from
   being archived. Do not recall to keep notes alive.
 
 ## Write
@@ -28,33 +28,34 @@ not hold instructions about how you should work; those belong in your own memory
 
   | Type | Rank |
   |---|---|
-  | `finding` | own result with number and condition, or a pitfall with cause and fix |
+  | `finding` | own result with number and condition, or a pitfall with cause and fix; `sources:` |
   | `decision` | a choice with its reason; section `## Rejected` |
-  | `derivation` | own derivation or proof step that is not in a source |
-  | `source` | a paper or document with your own assessment: what it means, where it is weak |
+  | `derivation` | own derivation or proof step that is not in a source; `sources:` |
+  | `source` | a paper or document with your own assessment: what it means, where it is weak; `ref:` is a DOI or a BibTeX key of `sb.toml` |
   | `question` | an open question that something depends on; section `## Depends on` |
   | `concept` | an own definition used by at least two other notes, not textbook material |
 
 - Never a note: conversation state, run status, logs, naming decisions, summaries without own assessment,
   anything that code, version control or a project file already records.
-- Before `sb new`, read the similar notes it prints and extend one instead where possible. One note, one
-  topic; several small facts about one thing belong in one note.
+- `sb new` prints similar notes first; if there are any, it writes nothing (exit 2, "not written"). Extend one,
+  or rerun with `--anyway` if the note has rank of its own. One note, one topic; small facts about one thing
+  belong together.
 - Negative results have rank: an approach that failed, with the reason, is a `finding`.
 - Limits are hard: title at most {title_words} words, body at most {body_words} words, at most {links} links, one project per note.
   If a topic does not fit, the detail belongs in the source, and the note links it with `sources:`.
-- The first paragraph is the gist; `recall` shows it. Write it so that it can be read without the rest.
+- The first paragraph is the gist, shown by `recall`; it must read without the rest.
 - `cue` states in one line when the note is needed; search weights it highest.
 - Fill every `TODO` of a skeleton, then run `sb check`; it must pass without errors.
 - No bulk import without an explicit instruction from the user.
 - Use `sb rename`, never a manual rename, so that links and `superseded_by` follow.
 - `sb archive <slug> --why faded|superseded|wrong [--reason "one sentence"] [--superseded-by <slug> ...]
   [--fix-links]` moves a note out of the default search and lists the notes that still link to it. `--why` is
-  always explicit: `faded` (unused), `superseded` (replaced), `wrong` (found false). `--reason` is required for
+  always explicit. `--reason` is required for
   `wrong` and for `superseded` without a successor. `--fix-links` points linking notes to the first successor,
   or without one removes the `## Links` bullets and turns inline links into plain text. Archived notes show
-  their reason in `show` and `recall --archive`, a wrong one marked `WRONG:`.
-- `sb restore <slug>` brings a note back and drops the archive fields; a note archived as `wrong` needs
-  `--force`, so fix its text first.
+  their reason in `show` and `recall --archive`; `recall --archive` marks a wrong one with `WRONG:`.
+- `sb restore <slug>` brings a note back, drops the archive fields and counts as use; a note archived as `wrong`
+  needs `--force`, so fix its text first.
 
 ## Reconsolidate
 
@@ -66,8 +67,9 @@ not hold instructions about how you should work; those belong in your own memory
 When sb says "sleep due" (a week since the last sleep, or a full plan of work waiting), the main session starts
 the sleep agent. It works in this order:
 
-1. `sb sleep begin`. From now on your calls are logged as sleep and do not count as use, except on notes the plan
-   does not name. An unfinished sleep blocks a second one (`--force` replaces it).
+1. `sb sleep begin`. Now edits of notes the plan names are not use. Read notes as files: `sb show` and
+   `sb recall` count as use, as a parallel session's do. An unfinished sleep blocks a second one (`--force`
+   replaces it).
 2. `sb sleep plan` prints five lists, each entry with its slug or inbox id. Work them in order. Every note you
    change must still pass `sb check`.
    - Consolidate: settle every open inbox line with `sb inbox resolve`. Extend a similar note, or create one
@@ -79,17 +81,15 @@ the sleep agent. It works in this order:
      A veto counts as use.
    - Verify: for each new, changed or never verified note, check its numbers against the listed sources and
      compare it with the listed neighbours for contradictions; fix or archive. Then the most active notes listed. After checking,
-     `sb sleep verified <slug> ...` sets `verified` without touching `updated`. Only verified notes leave the list; what you did not verify
-     comes back in the next plan. An answered question is archived with the
-     answering note as successor.
+     `sb sleep verified <slug> ...` sets `verified` without touching `updated`. Only verified notes leave the list. An answered question is archived with the answering note as successor.
    - Dream: link a pair (with a why) if they meet in substance, not only in words; else `sb sleep unrelated`.
 3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed and you left open, logs the
-   sleep and prints one line, expired lines apart (not settled). It warns when more than {max_promotion_rate} of at least ten
-   settled inbox lines were promoted.
+   sleep and prints a summary, each expired line apart and the dream count. It warns when more than
+   {max_promotion_rate} of at least ten settled inbox lines were promoted.
 
 The plan touches at most {sleep_budget} notes and inbox lines, learned from past sleeps: inbox lines first, then
-forget candidates and duplicate pairs by queue share, then verify, then the rest. It reports what did not fit as
-`deferred`; do not work beyond it, but finish it: an unfinished plan shrinks the next. A numeric check that needs more judgement may go to one stronger subagent.
+forget candidates and duplicate pairs, then verify, then the rest. It reports what did not fit as
+`deferred`; do not work beyond it, but finish it: an unfinished plan shrinks the next.
 
 ## Never
 

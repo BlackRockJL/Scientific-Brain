@@ -34,6 +34,14 @@ def uses(v: Vault, since: date | None = None, today: date | None = None) -> dict
     return {s: sorted(d.items()) for s, d in days.items()}
 
 
+def _shift(d: date, days: int) -> date:
+    """d plus days, held at the ends of the calendar (a clock at 0001 or 9999 must not crash the report)."""
+    try:
+        return d + timedelta(days=days)
+    except OverflowError:
+        return date.max if days > 0 else date.min
+
+
 def _int(x) -> int:
     try:
         return int(x)
@@ -92,7 +100,7 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
     sc = {x[0]: x for x in usage.scores(v, day, usage.learned(v, day))}
     cands = {s for s, *_ in usage.forget_candidates(v, day, list(sc.values()))} & set(sel)
     outlook = Counter()
-    end = day + timedelta(days=31 * MONTHS)
+    end = _shift(day, 31 * MONTHS)
     for s in sel:
         if s in sc and s not in cands:
             f = usage.fade_day(sc[s][4], sc[s][5], day)
@@ -101,9 +109,12 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
     learned, budget = usage.learned(v, day), usage.budget(v)
     stab = sorted(sc[s][4] for s in sel if s in sc)
 
-    sleeps = [r for r in v.rows("sleep.tsv", 8) if r[0][:10] >= (day - timedelta(RECENT)).isoformat()]
-    decided = sum(_int(r[3]) + _int(r[5]) for r in sleeps)
-    from_day = (day - timedelta(WINDOW)).isoformat()
+    recent_from = _shift(day, -RECENT).isoformat()
+    sleeps = [r for r in v.rows("sleep.tsv", 8) if r[0][:10] >= recent_from]
+    # candidates decided: sleep vetoes and faded archives (merged duplicates and wrong notes were no candidates)
+    decided = sum(_int(r[5]) for r in sleeps) + sum(n.get("archived_why") == "faded" and str(n.get("archived")) >= recent_from
+                                                    for n in arch.values())
+    from_day = _shift(day, -WINDOW).isoformat()
     aproj = {s: n.get("project") or n.folder for s, n in arch.items()}
     mine = lambda s: not project or proj.get(s, aproj.get(s)) == project  # noqa: E731
     vetoes = sum(r[0] >= from_day and mine(r[1]) for r in v.rows("vetoes.tsv", 3))

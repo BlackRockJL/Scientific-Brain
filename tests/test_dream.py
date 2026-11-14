@@ -159,7 +159,7 @@ def test_unrelated_errors_and_log(tmp_path):
     assert not (v / ".sb" / "unrelated.tsv").exists()
     code, out, _ = sb(v, "sleep", "unrelated", "one-b", "one-a", "different mechanisms")  # works outside a sleep
     assert code == 0 and out == "pair one-b ~ one-a logged as unrelated; it returns after the cooldown\n"
-    assert (v / ".sb" / "unrelated.tsv").read_text() == "2026-11-08\tone-a\tone-b\tdifferent mechanisms\n"  # sorted
+    assert (v / ".sb" / "unrelated.tsv").read_text() == "2026-11-08\tone-a\tone-b\tdifferent mechanisms\t0\n"  # sorted, with the renames so far
     assert not any("one-a" in p for p in dream(v)[0])
 
 

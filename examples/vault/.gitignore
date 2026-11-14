@@ -1,2 +1,3 @@
 .sb/index.sqlite*
 .sb/sleeping
+.sb/lock

@@ -167,12 +167,12 @@ def test_cli_rename_appends_to_renames_and_keeps_usage(tmp_path):
 def test_commands_log_usage_with_caller(tmp_path):
     v = make_vault(tmp_path)
     (v / ".sb" / "usage.tsv").write_text("", encoding="utf-8")
-    sb(v, "new", "finding", "fresh-one", "-p", "heat", "--why", "own measurement")
+    sb(v, "new", "finding", "zebu-quokka", "-p", "heat", "--why", "vexillology")  # no similar note: written at once
     sb(v, "show", "scheme-choice")
     sb(v, "recall", "stability", "limit")  # hits in notes/ are logged, archived and inbox hits are not
     sb(v, "recall", "--archive", "guess")
     rows = usage_lines(v)
-    assert ["2026-11-08", "work", "create", "fresh-one"] in rows and ["2026-11-08", "work", "show", "scheme-choice"] in rows
+    assert ["2026-11-08", "work", "create", "zebu-quokka"] in rows and ["2026-11-08", "work", "show", "scheme-choice"] in rows
     assert ["2026-11-08", "work", "recall", "ftcs-stability-limit"] in rows
     assert not any(r[3] == "ftcs-cfl-guess" and r[2] == "recall" for r in rows)
     (v / ".sb" / "sleeping").write_text("2026-11-08\n", encoding="utf-8")
@@ -198,18 +198,20 @@ def test_edit_is_detected_from_a_changed_file(tmp_path):
     assert usage_lines(v) == [["2026-11-08", "sync", "edit", "scheme-choice"]]  # found by the index, not done in a session
     sb(v, "map")
     assert len(usage_lines(v)) == 1  # seen once
-    add_note(v, "fresh-note")  # a new file counts as an edit too
+    add_note(v, "fresh-note")  # a new file is an import, not an edit
     sb(v, "map")
-    assert ["2026-11-08", "sync", "edit", "fresh-note"] in usage_lines(v)
+    assert not any(r[3] == "fresh-note" for r in usage_lines(v))
     (v / ".sb" / "sleeping").write_text("2026-11-08\n", encoding="utf-8")
     bump(p)
     sb(v, "map")
     assert ["2026-11-08", "sleep", "edit", "scheme-choice"] in usage_lines(v)
-    sb(v, "check", "--rebuild")  # a full rebuild is not an edit
+    sb(v, "check", "--rebuild")
     n = len(usage_lines(v))
     bump(p)
+    sb(v, "check", "--rebuild")  # a full rebuild still reports what changed in a note the old index knew
+    assert len(usage_lines(v)) == n + 1
     sb(v, "check", "--rebuild")
-    assert len(usage_lines(v)) == n
+    assert len(usage_lines(v)) == n + 1
     assert sb(v, "rename", "scheme-choice", "scheme-pick")[0] == 0  # rewriting links is not an edit
     sb(v, "map")
     assert not any(r[2] == "edit" and r[3] == "ftcs-stability-limit" for r in usage_lines(v))

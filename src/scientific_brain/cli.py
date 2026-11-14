@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 from collections import Counter
 from datetime import date
@@ -57,10 +58,16 @@ def cmd_init(a):
             (root / d).mkdir(parents=True, exist_ok=True)
         (root / "sb.toml").write_text(SB_TOML, encoding="utf-8")
         if not (root / ".gitignore").exists():
-            (root / ".gitignore").write_text(".sb/index.sqlite*\n.sb/sleeping\n", encoding="utf-8")
+            (root / ".gitignore").write_text(".sb/index.sqlite*\n.sb/sleeping\n.sb/lock\n", encoding="utf-8")
     except OSError as e:
         raise SbError(f"cannot create a vault at {root}: {e.strerror or e}")
     print(f"initialised vault at {root}")
+
+
+def _sleep_note(v):
+    """While a sleep runs, recall and show still count as use: the sleeper reads the note files instead."""
+    if sleep.running(v, usage.today()):
+        print("sb: a sleep is running; this call counts as use (the sleeper reads note files)", file=sys.stderr)
 
 
 def cmd_recall(a):
@@ -68,6 +75,7 @@ def cmd_recall(a):
     terms = [w for t in a.terms for w in t.split()]
     if match_query(terms)[0] is None:
         raise SbError("no usable search terms")
+    _sleep_note(v)
     locs = ("inbox", "expired") if a.inbox else LOCATIONS if a.archive else ("notes",)
     rows, ignored = idx.search(terms, locs, a.project, a.n)
     if ignored:
@@ -88,11 +96,7 @@ def cmd_recall(a):
         print(f"+{n} archived matches (use --archive)")
     if not a.inbox and (n := idx.count(terms, ("inbox", "expired"), a.project)):
         print(f"+{n} inbox matches (use --inbox)")
-    day = usage.today()
-    if sleep.started(v) is not None and not sleep.stale(v, day):
-        return  # a sleep is running: the sleeper's own recall must not call for another
-    work = sleep.backlog(v, day)
-    if (due := usage.sleep_due(v, idx.n_notes(), work["inbox"], day, work)):
+    if (due := sleep.due(v, idx.n_notes(), usage.today())):  # silent while a sleep runs
         print(due)
 
 
@@ -103,6 +107,7 @@ def cmd_show(a):
         raise SbError(f"no note '{a.slug}'")
     n = v.read(rel)
     usage.log(v, "show", n.slug)
+    _sleep_note(v)
     tag = ""
     if n.location == "archive":
         tag = f" ({archive_mark(n)})"
@@ -152,10 +157,16 @@ def cmd_new(a):
     print("similar notes (extend one instead if it fits):" if rows else "no similar notes")
     for slug, proj, typ, loc, title, *_ in rows:
         print(f"  {slug}  [{typ}, {proj}]{' (archived)' if loc == 'archive' else ''} {title}")
+    if rows and not a.anyway:  # the agent reads the similar notes before anything is written
+        raise SbError("not written: similar notes exist. Extend one of them, or run the same command again with --anyway "
+                      "if this note has rank of its own")
     path = v.root / "notes" / a.project / f"{a.slug}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "x", encoding="utf-8") as f:
-        f.write(skeleton(a.type, a.project, a.why, day.isoformat()))
+    try:
+        with open(path, "x", encoding="utf-8") as f:
+            f.write(skeleton(a.type, a.project, a.why, day.isoformat()))
+    except FileExistsError:  # created by a parallel session since the check above
+        raise SbError(f"slug '{a.slug}' already exists at {path.relative_to(v.root).as_posix()}")
     usage.log(v, "create", a.slug, day)
     print(f"created {path.relative_to(v.root).as_posix()} - fill every TODO, then run: sb check")
 
@@ -176,9 +187,10 @@ def cmd_check(a):
 
 def cmd_rename(a):
     v, idx = _vault_index()
-    paths = rename(v, a.old, a.new)
+    with v.locked():  # no parallel session logs under the old name between the rename and its log row
+        paths = rename(v, a.old, a.new)
+        usage.log_rename(v, a.old, a.new)
     idx.update(paths)
-    usage.log_rename(v, a.old, a.new)
     print(f"renamed {a.old} -> {a.new}; links rewritten in {len(paths) - 2} other notes")
 
 
@@ -225,8 +237,16 @@ def cmd_archive(a):
 
 def cmd_restore(a):
     v, idx = _vault_index()
+    try:
+        src = v.find(a.slug, ("archive",))
+        wrong = bool(src) and v.read(src).get("archived_why") == "wrong"
+    except SbError:
+        wrong = False
     paths = restore(v, a.slug, a.force)
     idx.update(paths)
+    usage.log(v, "show", a.slug)  # taking a note back is a full review: it must not be a forget candidate at once
+    if wrong:
+        sleep.unverify(v, a.slug)  # a note archived as wrong is checked again, even unchanged
     print(f"restored {a.slug} -> {paths[0]}")
 
 
@@ -239,6 +259,7 @@ def retired(v):
 
 def cmd_stats(a):
     v, idx = _vault_index()
+    v.ignore_lock()
     day = usage.today()
     rows, op = idx.counts(), inbox.open_lines(v)
     where = Counter(r[0] for r in rows)
@@ -256,7 +277,7 @@ def cmd_stats(a):
     print(f"learned: a new note rests {s0[''] :.0f} days (" + ", ".join(f"{t} {x:.0f}" for t, x in sorted(s0.items()) if t)
           + f"), a sleep takes {usage.budget(v)} items")
     print(f"forget candidates: {len(usage.forget_candidates(v, day, sc))}")
-    print(f"new notes in the last 7 days: {sum((day - x[2]).days < 7 for x in sc)}")
+    print(f"new notes in the last 7 days: {sum(0 <= (day - x[2]).days < 7 for x in sc)}")
     work = sleep.backlog(v, day)
     budget = usage.budget(v)
     print(f"waiting for a sleep: {sum(work.values())} (" + ", ".join(f"{k} {x}" for k, x in work.items())
@@ -265,7 +286,9 @@ def cmd_stats(a):
     print("last sleep: " + (f"{last} ({(day - last).days} days ago)" if last else "never"))
     if sleep.stale(v, day):
         print(f"warning: the sleep marker from {sleep.started(v)} was left behind (more than a day old); 'sb sleep begin' replaces it")
-    if (due := usage.sleep_due(v, where["notes"], work["inbox"], day, work)):
+    if sleep.running(v, day):
+        print(f"a sleep has been running since {sleep.started(v)}")
+    elif (due := sleep.due(v, where["notes"], day, work)):
         print(due)
     retired(v)
 
@@ -318,12 +341,9 @@ def cmd_hook(a):
             except SbError as e:
                 print(f"Scientific Brain: {e} (see README, 'Where the vault lives').")
                 return 0
+            v.ignore_lock()
             n = sum(r[0] == "notes" for r in idx.counts())
-            day = usage.today()
-            if sleep.started(v) is not None and not sleep.stale(v, day):
-                return 0  # a sleep is running; a second session must not start one
-            work = sleep.backlog(v, day)
-            if (due := usage.sleep_due(v, n, work["inbox"], day, work)):
+            if (due := sleep.due(v, n, usage.today())):  # None while a sleep runs; a second session must not start one
                 print(f"Scientific Brain: {due}. Use the sleep skill.")
             return 0
         fp = (json.load(sys.stdin).get("tool_input") or {}).get("file_path")
@@ -335,11 +355,15 @@ def cmd_hook(a):
             return 0
     except (SbError, ValueError, OSError, IndexError, AttributeError, TypeError):
         return 0
-    idx = _sync(v, Index(v))
+    try:
+        idx = _sync(v, Index(v))
+    except (SbError, sqlite3.Error, OSError):  # an unusable index must not keep the note from being checked
+        idx = None
     only = {rel}  # only the edited note; other notes' errors must not block this edit
     issues, _ = check(v, only)
     errs = [str(i) for i in issues if i.level == "error"]
-    idx.mark_checked(only - {i.where.rsplit(":", 1)[0] for i in issues if i.level == "error"})
+    if idx:
+        idx.mark_checked(only - {i.where.rsplit(":", 1)[0] for i in issues if i.level == "error"})
     if errs:
         print("sb check found errors:\n" + "\n".join(errs), file=sys.stderr)
         return 2
@@ -395,6 +419,26 @@ def count(s):
     return n
 
 
+def terms_behind_dashes(args):
+    """`sb recall` arguments with the search terms moved behind '--' when one starts with '-' (-1e-8, ---, -minus),
+    so that it is a term, not an option. Only the options of `recall` stay options."""
+    keep, terms, dashed, it = [], [], False, iter(args)
+    for t in it:
+        if t == "--":
+            terms.extend(it)
+            dashed = True
+        elif t in ("-n", "-p", "--project"):
+            keep.append(t)
+            keep.extend(x for x in [next(it, None)] if x is not None)
+        elif (t in ("-h", "--help", "--archive", "--inbox") or re.fullmatch(r"-n\d+|-p.+|--project=.*", t)
+              or len(t) > 2 and t[:2] == "--" and any(o.startswith(t) for o in ("--archive", "--inbox", "--project", "--help"))):
+            keep.append(t)
+        else:
+            terms.append(t)
+            dashed = dashed or len(t) > 1 and t[0] == "-"
+    return keep + (["--"] if dashed else []) + terms
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="sb", description="Scientific Brain: a lean second brain for research notes.")
     p.add_argument("--version", action="version", version=f"sb {__version__}")
@@ -419,6 +463,7 @@ def main(argv=None) -> int:
     sp.add_argument("slug")
     sp.add_argument("-p", "--project", required=True)
     sp.add_argument("--why", required=True, help="one line: why this note has rank")
+    sp.add_argument("--anyway", action="store_true", help="write although similar notes exist (without it nothing is written then)")
     sp = cmd("check", cmd_check, "validate schema, limits, links, sources")
     sp.add_argument("--changed", action="store_true", help="only notes not checked since their last change")
     sp.add_argument("--rebuild", action="store_true", help="rebuild the whole index first, archive included")
@@ -472,6 +517,9 @@ def main(argv=None) -> int:
     sp.add_argument("--top", type=count, help="notes per group in the Mermaid mind map (default 3, 6 for one project)")
     cmd("rules", cmd_rules, "print the agent rules")
     cmd("hook", cmd_hook, "entry point for Claude Code hooks").add_argument("event", choices=("after-edit", "session-start"))
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["recall"]:
+        argv = ["recall"] + terms_behind_dashes(argv[1:])
     a = p.parse_args(argv)
     try:
         if os.environ.get("SB_TODAY") and not DAY.fullmatch(os.environ["SB_TODAY"]):
@@ -484,6 +532,15 @@ def main(argv=None) -> int:
         return a.fn(a) or 0
     except SbError as e:
         print(f"sb: error: {e}", file=sys.stderr)
+        return 2
+    except UnicodeError as e:
+        print(f"sb: error: text that is not valid UTF-8 ({e})", file=sys.stderr)
+        return 2
+    except OSError as e:
+        print(f"sb: error: {e.strerror or e}" + (f": {e.filename}" if e.filename else ""), file=sys.stderr)
+        return 2
+    except sqlite3.Error as e:
+        print(f"sb: error: database error: {e}", file=sys.stderr)
         return 2
 
 

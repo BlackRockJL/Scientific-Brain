@@ -63,14 +63,15 @@ sb new finding ftcs-stability-limit -p heat --why "own measurement" # note skele
 sb check                                                            # error: unfilled TODO placeholder
 ```
 
-`sb new` writes a skeleton whose fields and sections read `TODO`. Until the agent or you fill them in,
-`sb check` exits with code 1 and names each placeholder: a note counts only once it is complete. Then
+`sb new` writes a skeleton whose fields and sections read `TODO`. If similar notes exist it lists them and writes
+nothing (exit code 2, "not written") until you run it again with `--anyway`. Until the agent or you fill the
+placeholders in, `sb check` exits with code 1 and names each placeholder: a note counts only once it is complete. Then
 `sb recall ftcs stability` finds it. `sb inbox` lists the open inbox lines; the next sleep promotes, keeps or
 drops them, and a line that waited too long expires (`sb inbox --expired`).
 
 To import an existing collection of notes, copy them into `notes/<project>/`, run `sb check` and fix what it
 reports, then `sb sleep baseline --seed 365`. The notes are accepted as they are, and the seed lets them fade
-one by one over that many days instead of all becoming forget candidates at once.
+one by one over that many days (more than 30) instead of all becoming forget candidates at once.
 
 ## Everyday use
 
@@ -83,7 +84,7 @@ Once set up, nothing needs to be done by hand. The plugin brings
   candidates) reaching what one sleep takes (the learned budget) at least 5 hours after the last sleep;
 - an **after-edit hook** that checks each note the agent writes and reports schema errors back to it;
 - the **sleeper** agent, which runs a due sleep. Other sessions may keep working in the vault meanwhile; their
-  use of notes still counts.
+  use of notes still counts (an edit of a note the running plan names is taken for the sleeper's).
 
 Skills fire only when the agent judges them relevant. To make it use the brain on every task, add this to the
 `CLAUDE.md` of your home folder or project:

@@ -259,7 +259,9 @@ def test_use_days_are_real_work_use_only(tmp_path):
     write_log(root, "usage.tsv", *rows((70, "work", "show", "a"), (70, "work", "edit", "a"), (60, "work", "recall", "a"), (50, "work", "create", "a"),
                                        (40, "sleep", "veto", "a"), (30, "sync", "edit", "a"), (20, "sleep", "show", "a"), (10, "work", "veto", "a"),
                                        (9, "work", "archive", "a"), (8, "work", "begin", "a")), "short", "x\twork\tshow\ta")
-    assert usage.use_days(Vault(root)) == {"a": {ago(70), ago(60), ago(50)}}  # no veto, no sync edit, no sleep call, no bad date
+    assert usage.use_days(Vault(root)) == {"a": {ago(70), ago(60), ago(50), ago(30)}}  # a sync edit is real use; no veto, no sleep call, no bad date
+    write_log(root, "seeds.tsv", (ago(25).isoformat(), "a", "1.0"))
+    assert usage.use_days(Vault(root)) == {"a": {ago(70), ago(60), ago(50)}}  # a sync edit before a seed belongs to the import
 
 
 def test_use_days_follow_renames(tmp_path):
@@ -515,7 +517,7 @@ def test_forget_candidates_accept_a_scores_list_and_agree_with_it(tmp_path):
     assert usage.forget_candidates(v, TODAY, []) == []  # an empty list is not 'compute it'
 
 
-def test_archive_and_restore_leave_the_stability_of_a_note_as_it_was(tmp_path):
+def test_archive_leaves_the_stability_alone_and_restore_counts_as_a_full_review(tmp_path):
     root = init_vault(tmp_path)
     put(root, "a", 100)
     put(root, "b", 100)
@@ -523,8 +525,10 @@ def test_archive_and_restore_leave_the_stability_of_a_note_as_it_was(tmp_path):
     before = score(root, "a")
     assert sb(root, "archive", "a", "--why", "faded")[0] == 0
     assert "a" not in {x[0] for x in usage.scores(Vault(root), TODAY)}  # scores cover notes/ only
+    assert usage.events(Vault(root))["a"] == {ago(60): 1.0, ago(20): 0.5}  # archiving is no use
     assert sb(root, "restore", "a")[0] == 0
-    assert score(root, "a") == before
+    R, S, last = score(root, "a")
+    assert usage.events(Vault(root))["a"][TODAY] == 1.0 and last == TODAY and R == 1.0 and S >= before[1]
 
 
 # ---- a stray old line, smooth learning, bounded seeds -----------------------------------------------------------

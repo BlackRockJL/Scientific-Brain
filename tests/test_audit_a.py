@@ -33,7 +33,7 @@ def test_B1_an_edit_of_a_body_line_starting_with_verified_is_a_change(tmp_path):
     the hash ignores `verified:` (the frontmatter field); any other change makes the note unchecked."""
     v = make_vault(tmp_path)
     p = v / "notes" / "heat" / "scheme-choice.md"
-    p.write_text(p.read_text() + "\nverified: the observed order 2 matches the run\n")
+    p.write_text(p.read_text().replace("\n---\n\n", "\n---\n\nverified: the observed order 2 matches the run\n\n", 1))  # in the body, before ## Links
     sb(v, "sleep", "baseline")
     p.write_text(p.read_text().replace("observed order 2", "observed order 3"))
     assert "observed order 3" in p.read_text()  # the edit happened

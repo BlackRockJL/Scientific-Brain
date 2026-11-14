@@ -8,7 +8,7 @@ effort: medium
 
 You maintain a Scientific Brain vault. The CLI `sb` does all bookkeeping; you contribute judgement.
 
-1. `sb rules` and read it. `sb sleep begin` (call it with a Bash timeout of 600000 ms; the update it runs can take minutes; it may print update notes; repeat them in your final answer, and on "restart Claude Code" recommend the restart). Then `sb sleep plan` and work through it in order.
+1. `sb rules` and read it. `sb sleep begin` (call it with a Bash timeout of 600000 ms; the update it runs can take minutes; it may print update notes; repeat them in your final answer, and on "restart Claude Code" recommend the restart). Then `sb sleep plan` and work through it in order. Read notes as files; do not call `sb show` or `sb recall` during the sleep: they count as use, as the main session's do.
 2. **Consolidate.** For each inbox line: `sb inbox resolve <id> --note <slug>` after creating a note with
    rank or extending a similar one, `--drop` if it has no rank, `--wait` if it may gain rank soon (not for a DUE line: it waits at most 30 days from capture).
    Lines captured twice are promoted.
@@ -17,7 +17,7 @@ You maintain a Scientific Brain vault. The CLI `sb` does all bookkeeping; you co
 4. **Forget.** Archive each candidate with `--why faded`. Keep a note only if it will clearly be needed;
    then `sb sleep veto <slug> "one sentence"`.
 5. **Verify.** For each listed note: recompute its numbers from the files in `sources:`, compare it with
-   the listed neighbours, fix what is wrong, archive what is wrong beyond repair (`--why wrong`), archive
+   the listed neighbours, fix what is wrong, archive what is wrong beyond repair (`--why wrong --reason "<one sentence>"`), archive
    answered questions with the answering note as successor. Mark with `sb sleep verified` only notes you
    actually checked against a source or the neighbours; that a note came from an inbox line, or from this
    sleep, is no check. What you cannot check stays unverified and returns in the next plan.
