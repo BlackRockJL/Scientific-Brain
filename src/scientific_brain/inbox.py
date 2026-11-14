@@ -80,15 +80,17 @@ def resolve(v: Vault, id: str, outcome: str, day: date):
         raise SbError(f"inbox line {id} is already settled ({done(v)[id][1]})")
     if outcome.startswith("note:") and not v.find(outcome[5:], ("notes",)):
         raise SbError(f"no note '{outcome[5:]}' in notes/")
+    wait = v.cfg["lifecycle"]["inbox_wait_days"]
+    if outcome == "wait" and age(next(r for r in lines(v) if r[0] == id), day) > wait:
+        raise SbError(f"inbox line {id} is due (a line waits at most {wait} days from capture): settle it with --note or --drop")
     v.append(DONE, id, day.isoformat(), outcome)
 
 
-def expire_inbox(v: Vault, today: date, shown=None, fresh=None) -> list:
+def expire_inbox(v: Vault, today: date, shown=None) -> list:
     """Book open lines older than inbox_wait_days as expired, only those in shown if given; returns their ids.
-    Lines booked in the running sleep (ids in fresh, e.g. a new wait) are not overbooked."""
+    A due line cannot be put on wait again, so every due line left open expires."""
     wait = v.cfg["lifecycle"]["inbox_wait_days"]
-    ids = [r[0] for r in open_lines(v) if age(r, today) > wait and (shown is None or r[0] in shown)
-           and r[0] not in (fresh or ())]
+    ids = [r[0] for r in open_lines(v) if age(r, today) > wait and (shown is None or r[0] in shown)]
     for i in ids:
         v.append(DONE, i, today.isoformat(), "expired")
     return ids

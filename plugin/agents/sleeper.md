@@ -10,7 +10,7 @@ You maintain a Scientific Brain vault. The CLI `sb` does all bookkeeping; you co
 
 1. `sb rules` and read it. `sb sleep begin` (call it with a Bash timeout of 600000 ms; the update it runs can take minutes; it may print update notes; repeat them in your final answer, and on "restart Claude Code" recommend the restart). Then `sb sleep plan` and work through it in order.
 2. **Consolidate.** For each inbox line: `sb inbox resolve <id> --note <slug>` after creating a note with
-   rank or extending a similar one, `--drop` if it has no rank, `--wait` if it may gain rank soon.
+   rank or extending a similar one, `--drop` if it has no rank, `--wait` if it may gain rank soon (not for a DUE line: it waits at most 30 days from capture).
    Lines captured twice are promoted.
 3. **Condense.** For each pair: merge into one note and archive the other with
    `--why superseded --superseded-by <kept> --fix-links`, or sharpen both titles and cues so they differ.

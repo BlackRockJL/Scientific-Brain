@@ -125,7 +125,7 @@ def test_expire_inbox_books_only_due_open_lines(tmp_path):
     put(v, "cccccc", 45, "heat", "waited too long")
     put(v, "dddddd", 50, "heat", "already dropped")
     vault = Vault(v)
-    inbox.resolve(vault, "cccccc", "wait", TODAY)
+    inbox.resolve(vault, "cccccc", "wait", TODAY - timedelta(days=20))  # waited while not yet due
     inbox.resolve(vault, "dddddd", "dropped", TODAY)
     assert sorted(inbox.expire_inbox(vault, TODAY)) == ["aaaaaa", "cccccc"]
     assert inbox.done(vault)["aaaaaa"] == ("2026-11-08", "expired")

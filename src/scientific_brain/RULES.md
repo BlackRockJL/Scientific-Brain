@@ -71,8 +71,8 @@ the sleep agent. It works in this order:
 2. `sb sleep plan` prints five lists, each entry with its slug or inbox id. Work them in order. Every note you
    change must still pass `sb check`.
    - Consolidate: settle every open inbox line with `sb inbox resolve`. Extend a similar note, or create one
-     only with rank, then `--note <slug>`; otherwise `--drop` or `--wait` (at most {inbox_wait_days} days; due lines are
-     marked DUE and expire at `sleep done`, listed by `sb inbox --expired`). Lines captured twice are promoted.
+     only with rank, then `--note <slug>`; otherwise `--drop` or `--wait` (at most {inbox_wait_days} days from capture; a DUE
+     line cannot wait again and expires at `sleep done`). Lines captured twice are promoted.
    - Condense: for each near-duplicate pair merge into one note and archive the other with `--why superseded
      --superseded-by`, or keep both with sharper titles and cues.
    - Forget: archive each candidate with `--why faded`, or keep it with `sb sleep veto <slug> "one sentence"`.
@@ -83,7 +83,7 @@ the sleep agent. It works in this order:
      comes back in the next plan. An answered question is archived with the
      answering note as successor.
    - Dream: link a pair (with a why) if they meet in substance, not only in words; else `sb sleep unrelated`.
-3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed (not your `--wait` ones), logs the
+3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed and you left open, logs the
    sleep and prints one line, expired lines apart (not settled). It warns when more than {max_promotion_rate} of at least ten
    settled inbox lines were promoted.
 

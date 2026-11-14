@@ -230,7 +230,7 @@ def plan(v: Vault, idx, day: date) -> str:
     s0 = usage.learned(v, day)
     sc = usage.scores(v, day, s0)
     last_use = {x[0]: x[5] for x in sc}
-    lines = [r for r in sorted(inbox.open_lines(v), key=lambda r: r[1]) if take("inbox:" + r[0])]
+    lines = [r for r in sorted(inbox.undecided(v, day), key=lambda r: (r[1], r[0])) if take("inbox:" + r[0])]  # a waiting line returns once due
     ids = {r[0] for r in lines}
     rem("shown", ids)
     pairs = {frozenset((r[0], h[0][6:])) for r in lines for h in near(keys(r[4]), "inbox:" + r[0], 3, locs=("inbox",))
@@ -500,7 +500,7 @@ def finish(v: Vault, summary: str, day: date) -> list:
     if start is None:
         raise SbError("no sleep is running (sb sleep begin)")
     planned, left = leftover(v, day, start)
-    expired = inbox.expire_inbox(v, day, remembered(v, "shown"), {i for i, _, _ in booked_now(v, start)})
+    expired = inbox.expire_inbox(v, day, remembered(v, "shown"))
     pairs, pend = remembered(v, "dream"), pending(v, start)
     booked = [o for _, d, o in booked_now(v, start) if o not in ("wait", "expired")]
     use = Counter(r[2] for _, r in pend)

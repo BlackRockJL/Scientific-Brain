@@ -162,14 +162,13 @@ def test_leftover_counts_the_size_of_the_plan_and_what_is_still_waiting(tmp_path
     assert sb(root, "inbox", "resolve", "bbbbbb", "--wait")[0] == 0 and left(root) == (5, 0)  # a wait booked in this sleep is a decision too
 
 
-def test_a_line_booked_before_this_sleep_still_counts_as_left_until_it_is_booked_in_it(tmp_path):
+def test_a_line_waiting_from_an_earlier_sleep_is_no_work_until_it_is_due(tmp_path):
     root = work_vault(tmp_path)
-    write_log(root, "inbox-done.tsv", f"aaaaaa\t{ago(1)}\twait")  # waited yesterday: still open, so the plan lists it again
+    write_log(root, "inbox-done.tsv", f"aaaaaa\t{ago(1)}\twait")  # waited yesterday, not due: the plan leaves it out
     sb(root, "sleep", "begin")
     sb(root, "sleep", "plan")
-    assert "inbox:aaaaaa" in sleep.remembered(Vault(root), "work")
-    assert left(root) == (5, 5)
-    assert sb(root, "inbox", "resolve", "aaaaaa", "--wait")[0] == 0 and left(root) == (5, 4)
+    assert "inbox:aaaaaa" not in sleep.remembered(Vault(root), "work")
+    assert left(root) == (4, 4)  # so it never counts as left undone and does not shrink the next plan
 
 
 def test_the_size_is_the_largest_plan_of_the_sleep(tmp_path):

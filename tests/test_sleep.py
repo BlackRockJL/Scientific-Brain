@@ -436,16 +436,33 @@ def test_done_keeps_expired_lines_apart_and_findable(tmp_path):
     assert Index(Vault(v)).n_inbox() == 0  # an expired line is not an open one
 
 
-def test_a_wait_on_a_due_line_is_not_expired_in_the_same_sleep(tmp_path):
+def test_a_due_line_cannot_wait_again_and_expires_unless_settled(tmp_path):
     v = make_vault(tmp_path)
     inb = v / ".sb" / "inbox.tsv"
-    inb.write_text("aaaaaa\t2026-09-01\theat\t\tdue but wanted\nbbbbbb\t2026-09-02\theat\t\tdue and forgotten\n")
+    inb.write_text("aaaaaa\t2026-09-01\theat\t\tdue but wanted\nbbbbbb\t2026-09-02\theat\t\tdue and forgotten\n"
+                   "cccccc\t2026-11-01\theat\t\tnot due yet\n")
     sb(v, "sleep", "begin")
     sb(v, "sleep", "plan")
-    assert sb(v, "inbox", "resolve", "aaaaaa", "--wait")[0] == 0
+    code, _, err = sb(v, "inbox", "resolve", "aaaaaa", "--wait")
+    assert code == 2 and "is due" in err and "--note or --drop" in err  # waits at most 30 days from capture
+    assert sb(v, "inbox", "resolve", "cccccc", "--wait")[0] == 0  # a line not yet due may wait
     out = sb(v, "sleep", "done", "s")[1]
-    assert "1 expired" in out and "expired bbbbbb:" in out and "aaaaaa" not in out
-    assert "aaaaaa" in sb(v, "inbox")[1] and "bbbbbb" not in sb(v, "inbox")[1]
+    assert "2 expired" in out and "expired aaaaaa:" in out and "expired bbbbbb:" in out
+    assert "cccccc" in sb(v, "inbox")[1]
+    assert sb(v, "inbox", "resolve", "aaaaaa", "--drop")[0] == 0  # an expired line can still be settled
+
+
+def test_a_waiting_line_leaves_the_plan_until_it_is_due(tmp_path):
+    v = make_vault(tmp_path)
+    (v / ".sb" / "inbox.tsv").write_text("aaaaaa\t2026-10-20\theat\t\twaits for a run\n")
+    (v / ".sb" / "inbox-done.tsv").write_text("aaaaaa\t2026-10-25\twait\n")
+    assert "aaaaaa" not in sb(v, "sleep", "plan")[1]  # 19 days old: waiting, not in the plan
+    import os
+    os.environ["SB_TODAY"] = "2026-11-20"  # 31 days old: due, back in the plan
+    try:
+        assert "`aaaaaa` 31d" in sb(v, "sleep", "plan")[1] and "DUE" in sb(v, "sleep", "plan")[1]
+    finally:
+        os.environ["SB_TODAY"] = TODAY.isoformat()
 
 
 def planned(v):

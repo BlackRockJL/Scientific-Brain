@@ -153,12 +153,14 @@ The plan is computed without a model; the agent only judges.
   (active); what does not fit is
   reported as deferred. The caps keep a wave of candidates from starving the other phases, and no budget is left
   unused while work waits.
+- **Waiting lines.** A line on `--wait` leaves the plan until it is due; then it comes back once, for a
+  note or a drop. So a wait costs no room in the plans before and never counts as work left undone.
 - **Self-regulating period.** A sleep is due after seven days, or as soon as a full plan of work waits (open
   inbox lines, unchecked notes and forget candidates add up to the budget) and five hours have passed since the
   last one. The period thus follows the inflow: a quiet week gets one sleep, a busy one several.
 - `sleep done` snapshots only the notes verified in this sleep (and keeps the old hashes of the rest), so a
-  deferred note stays in the plan until a sleep verifies it. It expires due inbox lines the plan showed (not
-  those put on `--wait` in this sleep) and reports them apart from the settled ones: an expired line is neither
+  deferred note stays in the plan until a sleep verifies it. It expires due inbox lines the plan showed and
+  left open (a line waits at most `inbox_wait_days` from capture; a due line cannot be put on wait again) and reports them apart from the settled ones: an expired line is neither
   settled nor promoted, stays findable (`sb inbox --expired`, `recall --inbox`), can still be settled with `sb inbox resolve`, and is listed with id and text.
   A line with an unreadable date counts as very old, so it is due. It
   warns when more than a quarter of at least ten settled inbox lines were promoted, a sign that the rank
