@@ -11,7 +11,7 @@ from collections import Counter
 from . import inbox
 from .vault import LOCATIONS, WIKI, ParseError, SbError, Vault
 
-VERSION = 6
+VERSION = 7
 # bm25 weights for slug, title, gist, cue, body, links: the cue counts most
 RANK = "bm25(fts, 3.0, 3.0, 2.0, 4.0, 1.0, 0.0)"
 COLS = "{slug title gist cue body} : "  # searches never look into the links column
@@ -25,7 +25,7 @@ fur uber vor um ist sind war waren wird werden wurde wurden hat haben hatte kann
 als auch noch nur so es sie wir ihr er sich dies diese dieser dieses""".split()
 PUNCT = " \t,.;:!?()[]{}<>\"'“”„‘’«»…*#-"  # stripped from both ends of a term
 SPLIT = re.compile("[,;()\\[\\]{}\"“”„«»]+")  # separates terms stuck together
-PREFIX = re.compile(r"(?:slug|title|gist|cue|body|links):")
+PREFIX = re.compile(r"(?:slug|title|gist|cue|body|links):")  # only at the start of a term
 TOKEN = re.compile(r"[^\W_]+")
 
 
@@ -43,7 +43,7 @@ def clean_terms(t: str):
     """Folded pieces of one raw term without punctuation at the edges, column prefix or possessive 's."""
     for piece in SPLIT.split(fold(t[:MAX_LEN]).translate(str.maketrans("–—", "--"))):
         piece = re.sub(r"['’]s$", "", piece.strip(PUNCT))
-        yield PREFIX.sub("", piece, count=1).strip(PUNCT)
+        yield (piece[m.end():] if (m := PREFIX.match(piece)) else piece).strip(PUNCT)
 
 
 def prepare(terms, short=False):
@@ -64,8 +64,17 @@ def prepare(terms, short=False):
     return list(dict.fromkeys(good))[:MAX_TERMS], list(dict.fromkeys(ignored))
 
 
+def nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
+
+
+def fts_text(s: str) -> str:
+    """Folded text as indexed: hyphens and dashes become spaces, so `Crank-Nicolson` meets `Crank Nicolson`."""
+    return fold(s).translate(str.maketrans("-–—", "   "))
+
+
 def quote_term(t: str) -> str:
-    return '"%s"' % t.replace('"', '""')
+    return '"%s"' % t.translate(str.maketrans("-–—", "   ")).replace('"', '""')
 
 
 def match_query(terms):
@@ -143,20 +152,22 @@ class Index:
             self.db.execute("DELETE FROM files WHERE id=?", row)
 
     def _put(self, rel, stat):
+        """Index one file; False when it does not parse."""
         self._drop(rel)
         try:
             n = self.v.read(rel)
         except ParseError as e:
             print(f"sb: not indexed: {e}", file=sys.stderr)
-            return
+            return False
         cur = self.db.execute("INSERT INTO files(path, location, mt, sz) VALUES(?,?,?,?)", (rel, n.location, *stat))
-        t, g, c = n.get("title"), n.gist, n.get("cue")
-        body, links = fold(WIKI.sub(" ", skip_body(n.body, self.skip))), fold(" ".join(f"[[{x}]]" for x in n.targets))
+        t, g, c, proj = n.get("title"), n.gist, n.get("cue"), nfc(n.folder)
+        body, links = fts_text(WIKI.sub(" ", skip_body(n.body, self.skip))), fts_text(" ".join(f"[[{x}]]" for x in n.targets))
         cols = "rowid, slug, title, gist, cue, body, links, project, type, location, rslug, rtitle, rgist, rcue"
         self.db.execute(f"INSERT INTO fts({cols}) VALUES({','.join('?' * 14)})",
-                        (cur.lastrowid, fold(n.slug), fold(t), fold(g), fold(c), body, links, n.folder, n.get("type"),
+                        (cur.lastrowid, fts_text(n.slug), fts_text(t), fts_text(g), fts_text(c), body, links, proj, n.get("type"),
                          n.location, n.slug, t, g, c))
-        self._put_short(cur.lastrowid, fold(n.slug), fold(c), n.location, n.folder)
+        self._put_short(cur.lastrowid, fold(n.slug), fold(c), n.location, proj)
+        return True
 
     def _put_short(self, rid, slug, cue, loc, proj):
         toks = {x for x in TOKEN.findall(slug + " " + cue) if len(x) < MIN_TERM}
@@ -191,14 +202,14 @@ class Index:
         for i, ((id, day, proj, src, text), loc) in enumerate(rows, 1):
             cols = "rowid, slug, title, gist, cue, body, links, project, type, location, rslug, rtitle, rgist, rcue"
             self.db.execute(f"INSERT INTO fts({cols}) VALUES({','.join('?' * 14)})",
-                            (-i, fold("inbox:" + id), "", fold(text), "", fold(src), "", proj, "inbox", loc,
+                            (-i, fts_text("inbox:" + id), "", fts_text(text), "", fts_text(src), "", nfc(proj), "inbox", loc,
                              "inbox:" + id, day, text, src))
-            self._put_short(-i, fold("inbox:" + id), "", loc, proj)  # a source path is no keyword
+            self._put_short(-i, fold("inbox:" + id), fold(text), loc, nfc(proj))  # a source path is no keyword
         self.db.execute("INSERT OR REPLACE INTO meta VALUES('inbox', ?)", (stamp,))
 
     def refresh(self, full=False):
         """Sync notes/ and the open inbox lines with disk; archive/ when full or when one of its folders changed.
-        Returns the slugs of notes/ files that are new or changed (none after a full build)."""
+        Returns the slugs of notes/ files that are new or changed and were indexed (none after a full build)."""
         rebuild = full
         skipped = self.db.execute("SELECT v FROM meta WHERE k='skip'").fetchone()
         full = full or self.created or (skipped or [None])[0] != ",".join(self.skip)
@@ -217,11 +228,13 @@ class Index:
         if not (todo or gone or stale or anew):
             return []
         self.db.execute("BEGIN IMMEDIATE")
+        changed = []
         try:
             for p in gone:
                 self._drop(p)
             for p in todo:
-                self._put(p, disk[p])
+                if self._put(p, disk[p]) and p.startswith("notes/"):
+                    changed.append(p)
             if stale:
                 self._put_inbox()
             self.db.execute("INSERT OR REPLACE INTO meta VALUES('archive', ?)", (astamp,))
@@ -234,7 +247,7 @@ class Index:
         if rebuild:
             self.db.execute("INSERT INTO fts(fts) VALUES('optimize')")  # merge the FTS segments, then drop free pages
             self.db.execute("VACUUM")
-        return [] if first else [p.rsplit("/", 1)[1][:-3] for p in todo if p.startswith("notes/")]
+        return [] if first else [p.rsplit("/", 1)[1][:-3] for p in changed]
 
     def update(self, rels):
         """Re-index (or drop) specific files, e.g. after a rename."""
@@ -256,7 +269,7 @@ class Index:
         sql = f"location IN ({','.join('?' * len(locs))})"
         if set(locs) <= {"inbox", "expired"}:  # inbox rows have negative rowids; the range keeps FTS5 from visiting every note
             sql += " AND rowid < 0"
-        return (sql + " AND project=?", [*locs, project]) if project else (sql, list(locs))
+        return (sql + " AND project=?", [*locs, nfc(project)]) if project else (sql, list(locs))
 
     def _hits(self, long, short, locs, project):
         """rowid -> number of terms found: long terms through FTS5, short ones as exact words of slug and cue."""
@@ -268,7 +281,7 @@ class Index:
         sw = f"loc IN ({','.join('?' * len(locs))})" + (" AND proj=?" if project else "")
         for t in short:
             cnt.update(r for (r,) in self.db.execute(f"SELECT rid FROM short WHERE tok=? AND {sw}",
-                                                     (t, *locs, *([project] if project else []))))
+                                                     (t, *locs, *([nfc(project)] if project else []))))
         return cnt
 
     def _need(self, good, cover):
@@ -284,12 +297,17 @@ class Index:
         w, args = self._where(locs, project)
         need = self._need(good, cover)
         cols = "rowid, rslug, project, type, location, rtitle, rgist, rcue"
-        rows = self.db.execute(
-            f"SELECT {cols} FROM fts WHERE fts MATCH ? AND {w} ORDER BY {RANK} LIMIT ?",
-            (COLS + "(" + " OR ".join(map(quote_term, long)) + ")", *args, limit * 10 + 50)).fetchall() if long else []
         cov = self._hits(long, short, locs, project) if need > 1 or short else None
-        if need > 1:
-            rows = [r for r in rows if cov[r[0]] >= need]
+        rows = []
+        if long:  # the coverage filter runs while reading the ranked rows, so it never loses a hit to a cut-off
+            cur = self.db.execute(f"SELECT {cols} FROM fts WHERE fts MATCH ? AND {w} ORDER BY {RANK}",
+                                  (COLS + "(" + " OR ".join(map(quote_term, long)) + ")", *args))
+            for r in cur:
+                if need <= 1 or cov[r[0]] >= need:
+                    rows.append(r)
+                    if len(rows) >= limit:
+                        break
+            cur.close()
         if short and len(rows) < limit:  # rows matching short terms only, best covered first
             seen = {r[0] for r in rows}
             more = sorted((r for r, c in cov.items() if c >= need and r not in seen), key=lambda r: (-cov[r], r))
@@ -312,7 +330,7 @@ class Index:
     def mentions(self, slug):
         """Candidate files whose body contains [[slug]]: (path, title)."""
         return self.db.execute("SELECT f.path, x.rtitle FROM fts x JOIN files f ON f.id = x.rowid WHERE fts MATCH ?",
-                               ('links : "' + fold("[[" + slug + "]]") + '"',)).fetchall()
+                               ('links : ' + quote_term(fts_text("[[" + slug + "]]")),)).fetchall()
 
     def listing(self, project=None):
         w, args = self._where(("notes",), project)
@@ -330,7 +348,9 @@ class Index:
         return self.db.execute("SELECT count(*) FROM files WHERE location='notes'").fetchone()[0]
 
     def unchecked(self):
-        return {p for (p,) in self.db.execute("SELECT path FROM files WHERE location='notes' AND ck=0")}
+        """Notes not checked since their last change, including those that do not parse (they are not indexed)."""
+        known = {p for (p,) in self.db.execute("SELECT path FROM files WHERE location='notes' AND ck=1")}
+        return set(self.v.scan("notes")) - known
 
     def mark_checked(self, rels):
         self.db.execute("BEGIN IMMEDIATE")

@@ -31,6 +31,9 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 """
 
 
+DAY = re.compile(r"\d{4}-\d{2}-\d{2}")  # date.fromisoformat alone also takes 20261108 and 2026-W45-1
+
+
 def _sync(v, idx, full=False):
     """Refresh the index; notes found changed on disk count as edited (usage log, caller sync)."""
     for slug in idx.refresh(full):
@@ -49,11 +52,14 @@ def cmd_init(a):
         raise SbError(f"{root} is already a vault")
     if not fts5_available():
         raise SbError("this Python's SQLite lacks FTS5 or the trigram tokenizer (SQLite >= 3.34 is required)")
-    for d in ("notes", "archive", ".sb"):
-        (root / d).mkdir(parents=True, exist_ok=True)
-    (root / "sb.toml").write_text(SB_TOML, encoding="utf-8")
-    if not (root / ".gitignore").exists():
-        (root / ".gitignore").write_text(".sb/index.sqlite*\n.sb/sleeping\n", encoding="utf-8")
+    try:
+        for d in ("notes", "archive", ".sb"):
+            (root / d).mkdir(parents=True, exist_ok=True)
+        (root / "sb.toml").write_text(SB_TOML, encoding="utf-8")
+        if not (root / ".gitignore").exists():
+            (root / ".gitignore").write_text(".sb/index.sqlite*\n.sb/sleeping\n", encoding="utf-8")
+    except OSError as e:
+        raise SbError(f"cannot create a vault at {root}: {e.strerror or e}")
     print(f"initialised vault at {root}")
 
 
@@ -82,7 +88,11 @@ def cmd_recall(a):
         print(f"+{n} archived matches (use --archive)")
     if not a.inbox and (n := idx.count(terms, ("inbox", "expired"), a.project)):
         print(f"+{n} inbox matches (use --inbox)")
-    if (due := usage.sleep_due(v, idx.n_notes(), len(inbox.undecided(v, usage.today())), usage.today())):
+    day = usage.today()
+    if sleep.started(v) is not None and not sleep.stale(v, day):
+        return  # a sleep is running: the sleeper's own recall must not call for another
+    work = sleep.backlog(v, day)
+    if (due := usage.sleep_due(v, idx.n_notes(), work["inbox"], day, work)):
         print(due)
 
 
@@ -130,6 +140,8 @@ def cmd_new(a):
         raise SbError(f"slug '{a.slug}' already exists at {old}")
     if (m := project_error(v, a.project)):
         raise SbError(m)
+    if a.project in ("", ".", "..") or a.project.startswith(".") or "/" in a.project or "\\" in a.project:
+        raise SbError(f"project '{a.project}' must be one visible folder name (no '/', no leading '.')")
     if not a.why.strip():
         raise SbError("--why must state the rank of the note")
     idx = _sync(v, Index(v))
@@ -180,7 +192,9 @@ def cmd_capture(a):
 def cmd_inbox(a):
     v, day = find_vault(), usage.today()
     if a.sub == "resolve":
-        outcome = f"note:{a.note}" if a.note else "dropped" if a.drop else "wait"
+        if a.note is not None and not a.note.strip():
+            raise SbError("--note needs the slug of an existing note")
+        outcome = f"note:{a.note}" if a.note is not None else "dropped" if a.drop else "wait"
         inbox.resolve(v, a.id, outcome, day)
         print(f"{a.id}: {outcome}")
         return
@@ -274,7 +288,12 @@ def cmd_sleep(a):
     v, idx = _vault_index()
     if a.sub == "plan":
         text = sleep.plan(v, idx, day)
-        print(f"wrote {a.out}" if a.out and Path(a.out).write_text(text, encoding="utf-8") else text, end="")
+        if a.out:
+            Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(a.out).write_text(text, encoding="utf-8")
+            print(f"wrote {a.out}")
+        else:
+            print(text, end="")
     elif a.sub == "veto":
         sleep.veto(v, a.slug, a.reason, day)
         print(f"veto for {a.slug} logged")
@@ -301,6 +320,8 @@ def cmd_hook(a):
                 return 0
             n = sum(r[0] == "notes" for r in idx.counts())
             day = usage.today()
+            if sleep.started(v) is not None and not sleep.stale(v, day):
+                return 0  # a sleep is running; a second session must not start one
             work = sleep.backlog(v, day)
             if (due := usage.sleep_due(v, n, work["inbox"], day, work)):
                 print(f"Scientific Brain: {due}. Use the sleep skill.")
@@ -328,6 +349,8 @@ def cmd_hook(a):
 def cmd_review(a):
     v, day = find_vault(), usage.today()
     try:
+        if a.since and not DAY.fullmatch(a.since):
+            raise ValueError
         since = date.fromisoformat(a.since) if a.since else None
     except ValueError:
         raise SbError(f"--since must be YYYY-MM-DD, got {a.since!r}")
@@ -335,7 +358,7 @@ def cmd_review(a):
     image = None
     if a.map:
         m = Path(a.map)
-        review.draw(v, inv, m, set(filter(None, (a.exclude or "").split(","))))
+        review.draw(v, inv, m, {x.strip() for x in (a.exclude or "").split(",") if x.strip()})
         image = os.path.relpath(m.resolve(), Path(a.out).resolve().parent) if a.out else str(m)
     text = review.report(inv, image)
     if a.out:
@@ -451,6 +474,8 @@ def main(argv=None) -> int:
     cmd("hook", cmd_hook, "entry point for Claude Code hooks").add_argument("event", choices=("after-edit", "session-start"))
     a = p.parse_args(argv)
     try:
+        if os.environ.get("SB_TODAY") and not DAY.fullmatch(os.environ["SB_TODAY"]):
+            raise ValueError
         usage.today()
     except ValueError:
         print(f"sb: error: SB_TODAY must be YYYY-MM-DD, got {os.environ['SB_TODAY']!r}", file=sys.stderr)

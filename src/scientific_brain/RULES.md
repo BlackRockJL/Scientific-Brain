@@ -79,10 +79,10 @@ the sleep agent. It works in this order:
      A veto counts as use.
    - Verify: for each new, changed or never verified note, check its numbers against the listed sources and
      compare it with the listed neighbours for contradictions; fix or archive. Then the most active notes listed. After checking,
-     `sb sleep verified <slug> ...` sets `verified` without touching `updated`. Only verified notes leave the
-     list; what you did not verify comes back in the next plan. An answered question is archived with the
+     `sb sleep verified <slug> ...` sets `verified` without touching `updated`. Only verified notes leave the list; what you did not verify
+     comes back in the next plan. An answered question is archived with the
      answering note as successor.
-   - Dream: link a pair (with a why) only if one changes how the other is read, else `sb sleep unrelated`.
+   - Dream: link a pair (with a why) if they meet in substance, not only in words; else `sb sleep unrelated`.
 3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed (not your `--wait` ones), logs the
    sleep and prints one line, expired lines apart (not settled). It warns when more than {max_promotion_rate} of at least ten
    settled inbox lines were promoted.

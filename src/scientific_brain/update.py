@@ -1,4 +1,4 @@
-"""Self-update at the start of a sleep, on by default (off: [update] auto = false or SB_NO_UPDATE=1): the CLI (git install, newest release tag) and the Claude Code plugin; never raises."""
+"""Self-update at the start of a sleep, on by default (off: [update] auto = false or SB_NO_UPDATE=1, true or yes): the CLI (git install, newest release tag) and the Claude Code plugin; never raises."""
 from __future__ import annotations
 
 import json
@@ -91,10 +91,13 @@ def _cli(note: list[str]):
 def _changed(out: str) -> bool:
     """Whether the --json result of `claude plugin update` reports a new version; unclear counts as no."""
     lines = out.strip().splitlines()
-    try:
-        d = json.loads(lines[-1]) if lines else None
-    except ValueError:
-        return False
+    d = None
+    for text in (out, lines[-1] if lines else ""):  # the whole output (indented JSON), else the last line
+        try:
+            d = json.loads(text)
+            break
+        except ValueError:
+            continue
     if not isinstance(d, dict):
         return False
     if d.get("success") is False or d.get("error"):
@@ -120,10 +123,13 @@ def _plugin(note: list[str]):
 
 def update(v: Vault) -> list[str]:
     """Message lines; empty means nothing to say."""
-    if os.environ.get("SB_NO_UPDATE") or not v.cfg["update"]["auto"]:
+    if os.environ.get("SB_NO_UPDATE", "").strip().lower() in ("1", "true", "yes") or not v.cfg["update"]["auto"]:
         return []
-    if ((_direct_url() or {}).get("dir_info") or {}).get("editable"):
-        return []  # a developer install leaves both the CLI and the plugin alone
+    try:
+        if ((_direct_url() or {}).get("dir_info") or {}).get("editable"):
+            return []  # a developer install leaves both the CLI and the plugin alone
+    except Exception:  # noqa: BLE001 - unreadable direct_url.json: the steps look again and report
+        pass
     note: list[str] = []
     for step in (_cli, _plugin):
         try:

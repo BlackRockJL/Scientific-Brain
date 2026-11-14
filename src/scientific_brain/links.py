@@ -22,7 +22,7 @@ def rewrite(text: str, old: str, new: str) -> str:
             items = parse_value("superseded_by", ln.split(":", 1)[1].strip(), f"line {i + 1}")
             parts[i] = "superseded_by: [" + ", ".join(new if x == old else x for x in items) + "]"
         elif i > end:
-            parts[i] = ln.replace(f"[[{old}]]", f"[[{new}]]")
+            parts[i] = re.sub(rf"\[\[\s*{re.escape(old)}\s*\]\]", f"[[{new}]]", ln)
     return "\n".join(parts)
 
 
@@ -81,9 +81,9 @@ def unlink(text: str, slug: str) -> str:
     for i, ln in enumerate(parts):
         if i > end:
             sec = ln[3:].strip() if ln.startswith("## ") else sec
-            if sec == "Links" and re.match(rf"\s*-\s*\[\[{re.escape(slug)}\]\]", ln):
+            if sec == "Links" and re.match(rf"\s*-\s*\[\[\s*{re.escape(slug)}\s*\]\]", ln):
                 continue
-            ln = ln.replace(f"[[{slug}]]", slug)
+            ln = re.sub(rf"\[\[\s*{re.escape(slug)}\s*\]\]", slug, ln)
         out.append(ln)
     return "\n".join(out)
 
@@ -132,6 +132,13 @@ def archive_note(v: Vault, slug: str, why: str, reason=None, successors=(), fix_
     return dst, inc, fixed
 
 
+def _wrong(ln: str) -> bool:
+    try:
+        return parse_value("archived_why", ln.split(":", 1)[1].strip(), "") == "wrong"
+    except SbError:
+        return False
+
+
 def restore(v: Vault, slug: str, force=False):
     """Move archive/P/slug.md back to notes/ and drop the archive fields; a note archived as wrong needs force.
     Returns [new, old] paths to re-index."""
@@ -142,7 +149,7 @@ def restore(v: Vault, slug: str, force=False):
         raise SbError(f"slug '{slug}' already exists at {clash}")
     parts = (v.root / src).read_text(encoding="utf-8").split("\n")
     end = fm_end(parts)
-    if not force and any(ln == "archived_why: wrong" for ln in parts[1:end]):
+    if not force and any(ln.startswith("archived_why:") and _wrong(ln) for ln in parts[1:end]):
         reason = next((ln.split(":", 1)[1].strip() for ln in parts[1:end] if ln.startswith("archived_reason:")), "")
         raise SbError(f"'{slug}' was archived as wrong ({reason}); fix its text first and restore with --force")
     keep = [ln for i, ln in enumerate(parts) if not (0 < i < end and ln.startswith(ARCHIVE_KEYS))]

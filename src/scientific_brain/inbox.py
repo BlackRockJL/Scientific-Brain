@@ -22,7 +22,13 @@ def project_for_cwd(v: Vault, cwd=None) -> str:
 
 
 def lines(v: Vault) -> list:
-    return [r for r in v.rows(INBOX, 5) if r[0]]
+    """Captured lines; an id present twice (a merged or synced file) counts once, its first line."""
+    seen, out = set(), []
+    for r in v.rows(INBOX, 5):
+        if r[0] and r[0] not in seen:
+            seen.add(r[0])
+            out.append(r)
+    return out
 
 
 def done(v: Vault) -> dict:
@@ -46,7 +52,7 @@ def age(row, today: date) -> int:
     try:
         return (today - date.fromisoformat(row[1])).days
     except ValueError:
-        return 0
+        return 36500  # an unreadable date is as old as it gets: the line is due
 
 
 def capture(v: Vault, text: str, project: str, source: str, day: date) -> str:
@@ -70,19 +76,19 @@ def resolve(v: Vault, id: str, outcome: str, day: date):
     """Book an open line as note:<slug>, dropped or wait."""
     if not any(r[0] == id for r in lines(v)):
         raise SbError(f"no inbox line '{id}'")
-    if not any(r[0] == id for r in open_lines(v)):
+    if not any(r[0] == id for r in open_lines(v)) and done(v)[id][1] != "expired":  # expired is not settled
         raise SbError(f"inbox line {id} is already settled ({done(v)[id][1]})")
     if outcome.startswith("note:") and not v.find(outcome[5:], ("notes",)):
         raise SbError(f"no note '{outcome[5:]}' in notes/")
     v.append(DONE, id, day.isoformat(), outcome)
 
 
-def expire_inbox(v: Vault, today: date, shown=None, since: date | None = None) -> list:
+def expire_inbox(v: Vault, today: date, shown=None, fresh=None) -> list:
     """Book open lines older than inbox_wait_days as expired, only those in shown if given; returns their ids.
-    Lines booked as wait on or after since (the running sleep) are not overbooked."""
-    fin, wait = done(v), v.cfg["lifecycle"]["inbox_wait_days"]
+    Lines booked in the running sleep (ids in fresh, e.g. a new wait) are not overbooked."""
+    wait = v.cfg["lifecycle"]["inbox_wait_days"]
     ids = [r[0] for r in open_lines(v) if age(r, today) > wait and (shown is None or r[0] in shown)
-           and not (since and r[0] in fin and fin[r[0]][0] >= since.isoformat())]
+           and r[0] not in (fresh or ())]
     for i in ids:
         v.append(DONE, i, today.isoformat(), "expired")
     return ids

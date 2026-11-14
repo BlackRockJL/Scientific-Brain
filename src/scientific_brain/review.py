@@ -17,9 +17,10 @@ MONTHS = 6      # months of the fading outlook
 WINDOW = 90     # days of veto and archive history the report shows
 
 
-def uses(v: Vault, since: date | None = None) -> dict:
-    """Current slug -> [(day, strength)]: work and sync events from usage.tsv; seeds and calls during a sleep do not count."""
-    cur, out = usage.renamer(v), defaultdict(list)
+def uses(v: Vault, since: date | None = None, today: date | None = None) -> dict:
+    """Current slug -> [(day, strength)]: work and sync events from usage.tsv, the strongest per note and day;
+    seeds, calls during a sleep and days after today (a wrong clock) do not count."""
+    cur, days = usage.renamer(v), defaultdict(dict)
     for i, (d, caller, kind, slug) in enumerate(v.rows("usage.tsv", 4)):
         if caller not in ("work", "sync") or kind not in usage.STRENGTH or kind == "veto":
             continue
@@ -27,9 +28,10 @@ def uses(v: Vault, since: date | None = None) -> dict:
             day = date.fromisoformat(d)
         except ValueError:
             continue
-        if since is None or day >= since:
-            out[cur(slug, i, day)].append((day, usage.STRENGTH[kind]))
-    return out
+        if (since is None or day >= since) and (today is None or day <= today):
+            s = cur(slug, i, day)
+            days[s][day] = max(days[s].get(day, 0.0), usage.STRENGTH[kind])
+    return {s: sorted(d.items()) for s, d in days.items()}
 
 
 def _int(x) -> int:
@@ -74,13 +76,15 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
         ts = n.targets
         outdeg[s] = len(ts)
         for t in ts:
+            if t == s:  # a link to itself is no incoming link
+                continue
             if t in notes:
                 inbound[t] += 1
                 if proj[t] != proj[s]:
                     cross[tuple(sorted((proj[s], proj[t])))] += 1
             elif t not in arch and s in sel:
                 dangling[s] += 1
-    used = uses(v, since)
+    used = uses(v, since, day)
     total = {s: sum(w for _, w in used.get(s, ())) for s in sel}
     recent = {s: sum(w for d, w in used.get(s, ()) if (day - d).days < RECENT) for s in sel}
     last = {s: max(d for d, _ in used[s]) for s in sel if used.get(s)}
@@ -100,12 +104,18 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
     sleeps = [r for r in v.rows("sleep.tsv", 8) if r[0][:10] >= (day - timedelta(RECENT)).isoformat()]
     decided = sum(_int(r[3]) + _int(r[5]) for r in sleeps)
     from_day = (day - timedelta(WINDOW)).isoformat()
-    vetoes = sum(r[0] >= from_day for r in v.rows("vetoes.tsv", 3))
-    faded = sum(n.get("archived_why") == "faded" and str(n.get("archived")) >= from_day for n in arch.values())
+    aproj = {s: n.get("project") or n.folder for s, n in arch.items()}
+    mine = lambda s: not project or proj.get(s, aproj.get(s)) == project  # noqa: E731
+    vetoes = sum(r[0] >= from_day and mine(r[1]) for r in v.rows("vetoes.tsv", 3))
+    faded = sum(n.get("archived_why") == "faded" and str(n.get("archived")) >= from_day and mine(s) for s, n in arch.items())
 
-    op = inbox.open_lines(v)
+    op = [r for r in inbox.open_lines(v) if not project or r[2] == project]
     due = sum(inbox.age(r, day) > lc["inbox_wait_days"] for r in op)
     prom, settled = inbox.promotion(v)
+    if project:
+        ids = {r[0] for r in inbox.lines(v) if r[2] == project}
+        out = [o for i, (_, o) in inbox.done(v).items() if i in ids and o not in ("wait", "expired")]
+        prom, settled = sum(o.startswith("note:") for o in out), len(out)
     questions = sorted(str(n.get("created")) for n in sel.values() if n.get("type") == "question")
 
     group = (lambda s: sel[s].get("type")) if project else (lambda s: proj[s])
@@ -133,7 +143,6 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
             weeks[(c - timedelta(c.weekday())).isoformat()] += 1
 
     warnings = []
-    need = len(cands) + sum(n for m, n in outlook.items() if m <= (day + timedelta(RECENT)).strftime("%Y-%m"))
     if len(cands) > budget and decided < len(cands):
         warnings.append(f"{len(cands)} forget candidates wait, but the sleeps of the last {RECENT} days decided only {decided}; "
                         f"sleep more often (the plan grows when sleeps finish it)")
@@ -150,7 +159,7 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
             "matrix": Counter((proj[s], sel[s].get("type")) for s in sel),
             "top_used": sorted((s for s in sel if total[s] > 0), key=lambda s: (-total[s], s))[:10],
             "total": total, "recent": recent, "last": last, "titles": {s: n.get("title") for s, n in sel.items()},
-            "candidates": len(cands), "outlook": dict(sorted(outlook.items())), "need": need,
+            "candidates": len(cands), "outlook": dict(sorted(outlook.items())),
             "learned": learned, "budget": budget, "stability": stab,
             "sleeps": len(sleeps), "decided": decided, "vetoes": vetoes, "faded": faded,
             "inbound": inbound, "outdeg": {s: outdeg[s] for s in sel}, "dangling": dangling,

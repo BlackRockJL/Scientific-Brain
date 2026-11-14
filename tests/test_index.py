@@ -20,7 +20,7 @@ def test_fold_keeps_ue_after_q_and_vowels():
 
 def test_query_quotes_every_term():
     q, ignored = match_query(["FFT-Solver", "C++", "1e-8", "AND", "a", "ab", "+-", "x.y"])
-    assert q == '"fft-solver" OR "c++" OR "1e-8" OR "ab" OR "x.y"'  # stop words drop out, short words stay as terms
+    assert q == '"fft solver" OR "c++" OR "1e 8" OR "ab" OR "x.y"'  # stop words drop out, short words stay; hyphens match spaces
     assert ignored == ["+-"]
     assert match_query(["the", "und"]) == (None, [])
 

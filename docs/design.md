@@ -47,7 +47,7 @@ growth needs periodic reduction.
   the same; restoring a `wrong` note requires `--force`.
 - Inbox, inbox results, usage, renames, vetoes and sleeps are append-only TSV files under `.sb/`. Parallel
   sessions can append without losing lines. Only `index.sqlite` (cache), `snapshot.tsv` (content hashes of the
-  checked notes) and the `sleeping` marker (start date, shown inbox lines, planned and verified notes) are rewritten.
+  checked notes, each row with the number of renames it already accounts for, so a freed name keeps its own row) and the `sleeping` marker (start date, shown inbox lines, planned and verified notes) are rewritten.
 - `sb rename` is all or nothing: if any note cannot be read or written, nothing is changed.
 
 ## Search
@@ -59,7 +59,8 @@ growth needs periodic reduction.
 - **Text folding** on both index and query: lower case, `ß → ss`, umlauts and `ae/oe/ue` (not at the end of a
   word, so `due` stays) folded to the base vowel. A trigram tokenizer finds parts of compounds and inflected
   forms. Every term is quoted, so hyphens, `C++` or `1e-8` cannot break a query; surrounding punctuation, a
-  `field:` prefix and a possessive `'s` are stripped, and dashes count as hyphens.
+  `field:` prefix and a possessive `'s` are stripped. Hyphens and dashes count as spaces in index and query, so
+  `Crank-Nicolson` and `Crank Nicolson` find each other.
 - **Filler words** (about a hundred German and English ones) are dropped from queries and from the keys the
   sleep plan searches with, so they neither match nor count towards coverage.
 - **Short terms.** The trigram tokenizer cannot match terms under three characters; abbreviations such as `CG`
@@ -117,13 +118,14 @@ The plan is computed without a model; the agent only judges.
 - **Consolidate:** each open inbox line with its three most similar notes; pairs of similar inbox lines mark a
   finding captured twice.
 - **Condense:** for each note updated since the last sleep, a search with the eight rarest words of its title
-  and cue; a pair is listed when the best other note covers at least 60 % of them and neither links the other
+  and cue; a pair is listed when the best other note covers at least 60 % of them, measured both ways and the smaller share
+  counting (an overview note contains the words of every note it summarises), and neither links the other
   (linked parts of one topic are not duplicates).
 - **Forget:** the candidates, lowest retrievability first.
 - **Verify:** notes not checked since they last changed, each with three nearest neighbours: a note is checked
-  when the snapshot holds its content hash (ignoring `verified:`), or, never snapshotted, when its `verified`
-  is not older than `updated`. Edited notes come before never-checked ones. Then the ten most active notes with
-  the oldest `verified`.
+  when the snapshot holds its content hash (ignoring the frontmatter field `verified:`), or, never snapshotted, when its `verified`
+  is not older than `updated`. Edited notes come before never-checked ones, newer first, ties by slug. Then, among the
+  twenty most active notes, the ten with the oldest `verified`.
 - **Dream:** up to five pairs of notes that are not linked yet, outside the budget so that they are
   never crowded out. Seeds are the notes new or changed since the last sleep, then the most active ones (at most
   20); for each, a search with its eight rarest words gives related notes, which are cut by the checks for
@@ -133,7 +135,11 @@ The plan is computed without a model; the agent only judges.
   project sharing at most one key word of title and cue, picked by a daily hash. The agent judges each pair and
   logs a rejection with `sleep unrelated`; the pair then rests like a note, for the vault's `S0` after one
   rejection and longer after each further one. The phase does not make a sleep due, and `sleep done` counts linked,
-  rejected and open pairs. Sleep recombines what is known; without links a note stays a filing-cabinet entry. The
+  rejected and open pairs. A sleep shows one set: a second plan in the same sleep repeats the pairs still open
+  instead of drawing new ones, so the count is what the agent saw. Near pairs are close by construction, so the
+  bar is substance, not surprise: a pair is linked when one note uses, implements, corrects, measures or
+  contradicts what the other states, or both share a mechanism, quantity or method; only a shared vocabulary
+  is rejected. Sleep recombines what is known; without links a note stays a filing-cabinet entry. The
   candidates are cheap and deterministic, the judgement is expensive, hence few pairs, and forgetting rejections
   with the same stability keeps the memory of them as light as the memory of notes.
 - **Budget:** a plan takes as many items as recent sleeps managed, learned from the size of each plan and the
@@ -153,7 +159,8 @@ The plan is computed without a model; the agent only judges.
 - `sleep done` snapshots only the notes verified in this sleep (and keeps the old hashes of the rest), so a
   deferred note stays in the plan until a sleep verifies it. It expires due inbox lines the plan showed (not
   those put on `--wait` in this sleep) and reports them apart from the settled ones: an expired line is neither
-  settled nor promoted, stays findable (`sb inbox --expired`, `recall --inbox`) and is listed with id and text. It
+  settled nor promoted, stays findable (`sb inbox --expired`, `recall --inbox`), can still be settled with `sb inbox resolve`, and is listed with id and text.
+  A line with an unreadable date counts as very old, so it is due. It
   warns when more than a quarter of at least ten settled inbox lines were promoted, a sign that the rank
   filter has become too loose.
 - `sleep baseline` accepts every note in its current form, e.g. after importing an existing collection: it

@@ -71,6 +71,14 @@ def check(v: Vault, only=None):
             add("error", f"{rel}:1", f"slug '{s}' is also used by {rels[0]}")
     roots = [v.root / r for r in v.cfg["source_roots"]]
     refs, graph, n_checked = {}, {}, 0
+    holders: dict = {}  # ref -> every note holding it, for a check of some notes only
+    if only is not None:  # a ref is unique in the whole vault, as a slug is
+        for rel in (r for loc in LOCATIONS for r in files[loc]):
+            try:
+                if (r := v.read(rel).get("ref")):
+                    holders.setdefault(r, []).append(rel)
+            except ParseError:
+                pass
     for rel in (r for loc in LOCATIONS for r in files[loc] if only is None or r in only):
         n_checked += 1
         try:
@@ -141,8 +149,11 @@ def check(v: Vault, only=None):
         if ref:
             if not (DOI.match(ref) or ref in bib):
                 err("ref", f"unknown citation key '{ref}' (not in the BibTeX files, not a DOI)")
-            if refs.setdefault(ref, rel) != rel:
-                err("ref", f"ref '{ref}' already used by {refs[ref]}")
+            other = next((r for r in holders.get(ref, ()) if r != rel), None) if only is not None else None
+            if only is None and refs.setdefault(ref, rel) != rel:
+                other = refs[ref]
+            if other:  # a full check names the later note once; a partial one flags whichever note it checks
+                err("ref", f"ref '{ref}' already used by {other}")
         for i, x in enumerate(n.raw.split("\n")):
             if TODO.search(x.strip()):
                 add("error", f"{rel}:{i + 1}", "unfilled TODO placeholder")

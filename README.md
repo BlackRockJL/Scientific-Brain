@@ -79,8 +79,8 @@ Once set up, nothing needs to be done by hand. The plugin brings
 - the skills **recall** (look up what is known before technical work), **capture** (store what a task taught),
   **sleep** (maintenance) and **review** (take stock), which Claude Code picks by their descriptions;
 - a **session-start hook** that stays silent unless `sb` or the vault is missing or a sleep is due: never
-  slept yet, more than 7 days since the last sleep, more than 30 open inbox lines, or a full sleep's worth of
-  work waiting;
+  slept yet, more than 7 days since the last sleep, or the waiting work (inbox lines, unverified notes, forget
+  candidates) reaching what one sleep takes (the learned budget) at least 5 hours after the last sleep;
 - an **after-edit hook** that checks each note the agent writes and reports schema errors back to it;
 - the **sleeper** agent, which runs a due sleep. Other sessions may keep working in the vault meanwhile; their
   use of notes still counts.
@@ -105,7 +105,7 @@ sb review -o review.md --map brain.png
 The review reads the vault and changes nothing; it does not even count as use. Ask the agent "how is my brain
 doing?" and the **review** skill runs it and sums it up. The report holds
 
-- warnings: forget candidates piling up faster than sleeps settle them, vetoed notes that come back too soon,
+- warnings: forget candidates piling up faster than sleeps settle them,
   overdue inbox lines, notes whose slug prefix belongs to another type, links to missing notes;
 - the inventory by project and type, and the archive by reason;
 - use per project and the most used notes;
@@ -125,8 +125,10 @@ YYYY-MM-DD` counts only later use, for example after an import that wrote its hi
 
 People recombine what they know while they sleep. So the last phase of every sleep offers a few pairs of notes
 that are not linked yet (at most five): related notes from the same and from
-different projects, and one deliberately distant pair. The sleeper agent links a pair only when one note changes
-how the other is read; no link is the normal outcome. A pair judged unrelated (`sb sleep unrelated <a> <b>
+different projects, and one deliberately distant pair. The sleeper agent links a pair when the two meet in
+substance (one uses, implements, corrects, measures or contradicts what the other states, or both share a mechanism,
+quantity or method) and rejects it when they share only words. A sleep shows one set of pairs; planning again
+repeats the open ones. A pair judged unrelated (`sb sleep unrelated <a> <b>
 "reason"`) rests like a note that is not used, and longer once rejected again.
 
 ## Where the vault lives
@@ -149,7 +151,7 @@ The vault can be versioned with git; `sb init` writes a `.gitignore` for the sea
 Each sleep first brings the CLI and the plugin up to the newest release tag `vX.Y.Z` (never `HEAD`). This
 applies to installs without a pin or pinned as `@refs/tags/vX.Y.Z`; any other pin and editable installs only get
 a hint. A new plugin loads after a restart of Claude Code. Switch it off with `auto = false` under `[update]` in
-`sb.toml` or with `SB_NO_UPDATE=1`.
+`sb.toml` or with `SB_NO_UPDATE=1` (`true` or `yes` also work).
 
 By hand: `pipx install --force git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/<tag>` and
 `/plugin marketplace update scientific-brain` in Claude Code.

@@ -168,7 +168,7 @@ def test_ls_remote_trouble_still_sleeps(tmp_path, monkeypatch, remote):
     out = update.update(Vault(root))
     assert len(out) == 1 and "(the sleep goes on)" in out[0] and not any(c[0] == "pipx" for c in f.calls)
     code, text, _ = sb(root, "sleep", "begin")
-    assert code == 0 and "(the sleep goes on)" in text and (root / ".sb" / "sleeping").read_text().strip() == "2026-11-08"
+    assert code == 0 and "(the sleep goes on)" in text and (root / ".sb" / "sleeping").read_text().split("\n")[0] == "2026-11-08"
 
 
 def test_plugin_update_reported(tmp_path, monkeypatch):

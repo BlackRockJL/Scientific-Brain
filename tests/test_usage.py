@@ -270,11 +270,11 @@ def test_stats_sleep_due_rules(tmp_path):
         f.write(f"id9999\t{ago(1)}\tp\t\tline 38\n")
     out = sb(v, "stats")[1]
     assert "sleep due: 40 items waiting (inbox 39, verify 1)" in out and "inbox: 39 open, oldest 1 days" in out
-    assert "sleep due" not in sb(v, "recall", "anything")[1]  # recall counts only the inbox: 39 of 40
+    assert "sleep due: 40 items waiting (inbox 39, verify 1)" in sb(v, "recall", "anything")[1]  # recall counts all waiting work, as stats does
     with open(v / ".sb" / "inbox.tsv", "a", encoding="utf-8") as f:
         f.write(f"id9998\t{ago(1)}\tp\t\tline 39\n")
     assert "sleep due: 41 items waiting (inbox 40, verify 1)" in sb(v, "stats")[1]
-    assert "sleep due: 40 items waiting" in sb(v, "recall", "anything")[1]  # recall ends with the same kind of line
+    assert "sleep due: 41 items waiting (inbox 40, verify 1)" in sb(v, "recall", "anything")[1]  # the same line as stats
     with open(v / ".sb" / "inbox-done.tsv", "w", encoding="utf-8") as f:  # a sleep left them all waiting
         f.write("".join(f"id{i:04d}\t{ago(0)}\twait\n" for i in range(38)) + f"id9999\t{ago(0)}\twait\nid9998\t{ago(0)}\twait\n")
     out = sb(v, "stats")[1]

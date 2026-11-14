@@ -10,5 +10,6 @@ allowed-tools: Bash(sb *)
 2. Read the report. Give the user its warnings first, then a short judgement in your own words: which
    projects carry the work, what fades, whether the sleeps keep up, what the structure says (hubs, unlinked notes,
    prefixes of another type).
-3. Propose changes to `sb.toml` (veto weight, horizons, budgets) only with the numbers from the report, and change
-   nothing without the user's yes. The review itself never changes the vault.
+3. Propose follow-up actions (a sleep, archiving a note, settling inbox lines) only with the numbers from the
+   report, and change nothing without the user's yes. sb learns its own limits; `sb.toml` has nothing to tune.
+   The review itself never changes the vault.

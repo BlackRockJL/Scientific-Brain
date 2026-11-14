@@ -67,7 +67,7 @@ def test_plan_has_phase_five_with_at_most_dream_pairs(tmp_path, monkeypatch):
     pairs, out = dream(v)
     assert "## 5. Dream: 5 candidate pairs" in out and len(pairs) == 5
     assert sum("across projects" in p for p in pairs) == 3 and sum("same project" in p for p in pairs) == 2  # 2 and 2, one filled up
-    assert "`sb sleep unrelated <a> <b>" in out and "No link is the normal outcome." in out
+    assert "`sb sleep unrelated <a> <b>" in out and "only when they share words, not substance" in out
     assert f"  {pairs[0][2:].split(' ')[0]} [finding]: " in out  # each pair shows the gist of both notes
     monkeypatch.setitem(vault_mod.LIFECYCLE, "dream_pairs", 2)  # a constant, not an sb.toml setting
     assert len(dream(v)[0]) == 2
@@ -285,3 +285,38 @@ def test_dream_costs_no_budget_and_does_not_make_a_sleep_due(tmp_path, monkeypat
     work = sleep.backlog(Vault(v), TODAY)
     assert set(work) == {"inbox", "verify", "forget"}
     assert usage.sleep_due(Vault(v), 6, 0, TODAY) == "sleep due: never slept"
+
+
+def test_a_second_plan_in_one_sleep_repeats_the_open_pairs(tmp_path):
+    v = vault(tmp_path)
+    for i in range(3):
+        pair(v, i, f"p{i}-a", f"p{i}-b")
+    fill(v)
+    sb(v, "sleep", "begin")
+    first, _ = dream(v)
+    assert len(first) == 3
+    pair(v, 5, "late-a", "late-b")  # new notes after the first plan bring no new pairs in this sleep
+    sb(v, "sleep", "unrelated", "p0-a", "p0-b", "no shared mechanism")
+    again, out = dream(v)
+    assert sorted(again) == sorted(p for p in first if "p0-a" not in p) and "## 5. Dream: 2 candidate pairs" in out
+    assert not any("late-" in p for p in again)
+    assert "dream: 0 linked, 1 unrelated, 2 open of 3" in sb(v, "sleep", "done", "x")[1].splitlines()[-1]
+    sb(v, "sleep", "begin")  # the next sleep draws afresh
+    assert any("late-" in p for p in dream(v)[0])
+
+
+def test_verify_asks_to_mark_only_what_was_checked(tmp_path):
+    v = vault(tmp_path)
+    pair(v, 0, "one-a", "one-b")
+    out = sb(v, "sleep", "plan")[1]
+    assert "Mark only what you checked" in out and "came from an inbox line is no check" in out
+
+
+def test_a_sleep_whose_first_plan_found_no_pair_draws_none_later(tmp_path):
+    v = vault(tmp_path)
+    fill(v)
+    sb(v, "sleep", "begin")
+    assert dream(v)[0] == []
+    pair(v, 0, "late-a", "late-b")
+    pairs, out = dream(v)
+    assert pairs == [] and "(still open from this sleep's first plan)" in out

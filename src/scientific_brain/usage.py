@@ -187,7 +187,8 @@ def gaps(v: Vault, today: date) -> dict:
             ds = sorted(days)
             gs = [(min((b - a).days, CEIL), min(((today - a).days - CEIL) / CEIL, 1.0))
                   for a, b in zip(ds, ds[1:]) if (today - a).days > CEIL and b <= today]
-            out.setdefault(n.get("type"), []).extend((g, r / len(gs)) for g, r in gs)
+            tot = max(1.0, sum(r for _, r in gs))  # a note weighs at most 1; dividing by at least 1 keeps phase-in steady
+            out.setdefault(n.get("type"), []).extend((g, r / tot) for g, r in gs)
     return out
 
 
@@ -259,13 +260,19 @@ def creates_today(v: Vault, today: date) -> int:
     return sum(d == today.isoformat() and c == "work" and k == "create" for d, c, k, _ in v.rows("usage.tsv", 4))
 
 
-def last_sleep_at(v: Vault) -> datetime | None:
-    """End of the last sleep; a row with a date only (before 0.2.1) counts from midnight."""
+def last_sleep_at(v: Vault, day: date | None = None) -> datetime | None:
+    """End of the last sleep as local naive time; a row with a date only (before 0.2.1) counts from midnight, one with a
+    zone is converted, one after now (a wrong clock) is skipped."""
+    now = datetime.fromisoformat(stamp(day or today()))
     for row in reversed(v.rows("sleep.tsv", 3)):
         try:
-            return datetime.fromisoformat(row[0])
+            at = datetime.fromisoformat(row[0])
         except ValueError:
-            pass
+            continue
+        if at.tzinfo:
+            at = at.astimezone().replace(tzinfo=None)
+        if at <= now:
+            return at
     return None
 
 
@@ -302,7 +309,7 @@ def budget(v: Vault) -> int:
 def sleep_due(v: Vault, n_notes: int, n_inbox: int, today: date, work: dict | None = None) -> str | None:
     """The 'sleep due' line, or None: never slept (with notes), last sleep over WEEK days ago, or a full plan of work
     waiting at least GAP_HOURS after the last sleep. Sleeps thus come as often as work arrives."""
-    at, why = last_sleep_at(v), []
+    at, why = last_sleep_at(v, today), []
     last = at.date() if at else None
     gap = at is None or datetime.fromisoformat(stamp(today)) - at >= timedelta(hours=GAP_HOURS)
     n = sum(work.values()) if work else n_inbox

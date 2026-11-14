@@ -190,3 +190,15 @@ def test_the_help_of_stats_names_what_it_shows(capsys):
     with pytest.raises(SystemExit):
         main(["--help"])
     assert "counts, stability, learned values, inbox, last sleep" in " ".join(capsys.readouterr().out.split())
+
+
+
+def test_recall_is_silent_about_a_due_sleep_while_one_runs(tmp_path):
+    """gutachten 2026-11-14: the sleeper's own recall must not report "sleep due" (the hook is silent too)."""
+    from scientific_brain import usage
+    v = make_vault(tmp_path)
+    for i in range(45):
+        sb(v, "capture", f"line {i} about quasar nebula", "-s", "x")
+    assert "sleep due" in sb(v, "recall", "quasar")[1]
+    sb(v, "sleep", "begin")
+    assert "sleep due" not in sb(v, "recall", "quasar")[1]

@@ -25,13 +25,13 @@ def tsv(v, name):
 
 def test_begin_twice_force_and_stale(tmp_path):
     v = make_vault(tmp_path)
-    assert sb(v, "sleep", "begin")[0] == 0 and sleeping(v).read_text().strip() == "2026-11-08"
+    assert sb(v, "sleep", "begin")[0] == 0 and sleeping(v).read_text().split("\n")[0] == "2026-11-08"
     code, _, err = sb(v, "sleep", "begin")
     assert code == 2 and "running since 2026-11-08" in err
     assert sb(v, "sleep", "begin", "--force")[0] == 0
     sleeping(v).write_text("2026-11-06\n")  # two days old: stale, replaced with a note
     code, out, _ = sb(v, "sleep", "begin")
-    assert code == 0 and "replaced the sleep from 2026-11-06" in out and sleeping(v).read_text().strip() == "2026-11-08"
+    assert code == 0 and "replaced the sleep from 2026-11-06" in out and sleeping(v).read_text().split("\n")[0] == "2026-11-08"
     sleeping(v).write_text("2026-11-07\n")  # one day old is still running
     assert sb(v, "sleep", "begin")[0] == 2
 
@@ -509,3 +509,21 @@ def test_deferred_counts_notes_not_refusals(tmp_path, monkeypatch):
     n = int(full.split("touched: ")[1].split(" ")[0])
     monkeypatch.setattr(usage, "B0", 3)
     assert f"touched: 3 of 3 (notes and inbox lines), deferred: {n - 3}" in sb(v, "sleep", "plan")[1]
+
+
+def test_a_second_sleep_on_the_same_day_counts_only_its_own_work(tmp_path):
+    v = make_vault(tmp_path)
+    add_note(v, "pair-a", project="pa", gist="Gist: quasar nebula photon plasma alpha.")
+    add_note(v, "pair-b", project="pb", gist="Gist: quasar nebula photon plasma beta.")
+    ids = [sb(v, "capture", f"line {w} about vortex cobalt", "-s", "x")[1].strip() for w in ("one", "two")]
+    sb(v, "sleep", "begin")
+    sb(v, "sleep", "plan")
+    for i in ids:
+        assert sb(v, "inbox", "resolve", i, "--drop")[0] == 0
+    sb(v, "sleep", "unrelated", "pair-a", "pair-b", "no shared mechanism")
+    assert "2 inbox lines settled" in sb(v, "sleep", "done", "first")[1]
+    sb(v, "sleep", "begin")
+    sb(v, "sleep", "plan")
+    out = sb(v, "sleep", "done", "second")[1]
+    assert "slept 2026-11-08: 0 inbox lines settled" in out and "unrelated" not in out.replace("0 unrelated", "")
+    assert [r[1:3] for r in tsv(v, "sleep.tsv")] == [["2", "0"], ["0", "0"]]

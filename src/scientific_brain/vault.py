@@ -14,6 +14,7 @@ except ModuleNotFoundError:  # Python 3.10
 LISTKEYS = {"sources", "superseded_by"}
 SLUG = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*\Z")  # \Z: "$" would accept a trailing newline
 WIKI = re.compile(r"\[\[([^\]\n]+)\]\]")
+ITEM = re.compile(r'\s*("[^"]*"|[^,"]*)\s*(?:,|$)')
 KEY = re.compile(r"([a-z_][a-z0-9_]*):(?:\s+(.*))?$")
 LOCATIONS = ("notes", "archive")
 DEFAULTS = {"projects": [], "folder_map": {}, "source_roots": [], "bibtex": [],
@@ -53,7 +54,16 @@ def parse_value(key: str, v: str, where: str):
     if v.startswith("["):
         if not v.endswith("]"):
             raise ParseError(where, "unclosed list, expected [a, b]")
-        val = [x for x in (unquote(i.strip()) for i in re.findall(r'\s*("[^"]*"|[^,"]*)\s*(?:,|$)', v[1:-1])) if x]
+        val, inner, pos = [], v[1:-1], 0
+        while True:  # every item is "quoted" or free of quotes; anything else is an error, not a dropped item
+            m = ITEM.match(inner, pos)
+            if not m:
+                raise ParseError(where, f"bad list item near {inner[pos:pos + 20]!r}")
+            if (x := unquote(m[1].strip())):
+                val.append(x)
+            if not m[0].endswith(","):
+                break
+            pos = m.end()
     else:
         val = unquote(v)
     if (key in LISTKEYS) != isinstance(val, list):
@@ -115,7 +125,7 @@ class Note:
 
     @property
     def headings(self):
-        return set(re.findall(r"^##\s+(.+?)\s*$", self.body, flags=re.M))
+        return set(re.findall(r"^##[ \t]+(.+?)[ \t]*$", self.body, flags=re.M))
 
 
 class Vault:
@@ -123,7 +133,7 @@ class Vault:
         self.root = root.resolve()
         try:
             user = tomllib.loads((self.root / "sb.toml").read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError) as e:
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
             raise SbError(f"{self.root / 'sb.toml'}: {e}")
         for k, default in DEFAULTS.items():
             val = user.get(k, default)
@@ -148,7 +158,10 @@ class Vault:
                 if d.is_dir() and not d.name.startswith("."):
                     for f in os.scandir(d.path):
                         if f.name.endswith(".md") and not f.name.startswith("."):
-                            st = f.stat()
+                            try:
+                                st = f.stat()
+                            except OSError:  # dangling symlink
+                                continue
                             out[f"{loc}/{d.name}/{f.name}"] = (st.st_mtime_ns, st.st_size)
         return out
 
@@ -190,15 +203,34 @@ class Vault:
             if not p.is_file():
                 continue
             text = p.read_text(encoding="utf-8", errors="replace")
-            ms = list(re.finditer(r"@\w+\s*\{\s*([^,\s]+)\s*,", text))
+            ms = list(re.finditer(r"@(\w+)\s*\{\s*([^,\s]*)", text))
             for i, m in enumerate(ms):
+                if m[1].lower() in ("string", "comment", "preamble") or not re.match(r"\s*,", text[m.end():]):
+                    continue
                 chunk = text[m.end():ms[i + 1].start() if i + 1 < len(ms) else len(text)]
                 d = {}
-                for fm in re.finditer(r'\b(title|author|year)\s*=\s*(?:\{((?:[^{}]|\{[^{}]*\})*)\}|"([^"]*)"|(\d+))',
-                                      chunk, flags=re.I):
-                    d[fm[1].lower()] = " ".join((fm[2] or fm[3] or fm[4] or "").split())
-                out[m[1]] = d
+                for fm in re.finditer(r'\b(title|author|year)\s*=\s*', chunk, flags=re.I):
+                    val = _bibvalue(chunk, fm.end())
+                    if val is not None:
+                        d[fm[1].lower()] = " ".join(val.split())
+                out[m[2]] = d
         return out
+
+
+def _bibvalue(t: str, i: int):
+    """Value at t[i]: {braced, any depth}, "quoted" or a bare number; None if it is none of these."""
+    if t.startswith("{", i):
+        depth = 0
+        for j in range(i, len(t)):
+            depth += (t[j] == "{") - (t[j] == "}")
+            if not depth:
+                return t[i + 1:j]
+        return None
+    if t.startswith('"', i):
+        j = t.find('"', i + 1)
+        return t[i + 1:j] if j > 0 else None
+    m = re.match(r"\d+", t[i:])
+    return m[0] if m else None
 
 
 def find_vault(start=None) -> Vault:
