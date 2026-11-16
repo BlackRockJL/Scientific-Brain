@@ -9,7 +9,7 @@ and modelled on human memory.
   (proposes new links).
 - **Forgetting:** every use makes a note more stable, the more so the closer it was to fading; notes that are no
   longer used fade into an archive. Nothing is deleted.
-- **Nothing to tune:** how long notes rest and how much a sleep takes are learned from the vault's own logs.
+- **Nothing to tune:** how long notes rest and how much a sleep takes are learned from the vault's own logs. The one setting is the longest note body (`body_words` in `sb.toml`), because only the writing style depends on it; the other limits are fixed because `sb` itself needs them (slugs, dreaming).
 - **Review:** `sb review` takes stock of the whole vault, as a report and as a map of the notes.
 - **Small:** pure Python ≥ 3.10 and SQLite full-text search; only the map needs numpy and matplotlib.
 
@@ -27,10 +27,10 @@ The agent then works through these steps:
 
 1. **Prerequisites.** Python ≥ 3.10, git and [pipx](https://pipx.pypa.io) (macOS `brew install pipx`, Debian
    or Ubuntu `sudo apt install pipx`, then `pipx ensurepath` and a new shell).
-2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.3.1`
+2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.3.2`
    instead keeps this version.
    ```bash
-   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.3.1
+   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.3.2
    sb --version
    ```
 3. **Create the vault.** `sb init ~/research-brain` (any folder works, see [Where the vault lives](#where-the-vault-lives)).
@@ -139,7 +139,7 @@ otherwise the nearest folder at or above the current directory that contains an 
 creates
 
 ```
-sb.toml              projects, source roots, limits
+sb.toml              projects, source roots, body word limit
 notes/<project>/     active notes, one Markdown file each
 archive/<project>/   forgotten or superseded notes, restorable
 .sb/                 inbox, usage and sleep logs, search index (written by sb only)

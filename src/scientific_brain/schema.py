@@ -135,7 +135,7 @@ def check(v: Vault, only=None):
                 add("error", f"{rel}:{n.body_line}", f"type '{typ}' requires a section '## {s}'")
         if n.location == "notes":
             for ok, msg in ((len(n.get("title").split()) <= lim["title_words"], f"title has more than {lim['title_words']} words"),
-                            (len(n.body.split()) <= lim["body_words"], f"body has more than {lim['body_words']} words"),
+                            (len(n.body.split()) <= lim["body_words"], f"body has more than {lim['body_words']} words (sb.toml [limits] body_words)"),
                             (len(n.targets) <= lim["links"], f"more than {lim['links']} links")):
                 if not ok:
                     add("error", f"{rel}:{n.body_line}", msg)

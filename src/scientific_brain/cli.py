@@ -28,6 +28,9 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 # skip_sections = []                         # headings whose sections stay out of the full-text search
 # [update]
 # auto = true                                # each sleep updates the CLI and the plugin to the latest release tag (false or SB_NO_UPDATE=1 stops it)
+# Every vault chooses the longest note body (in words) itself:
+[limits]
+body_words = 600
 # Nothing else is set here: how long notes rest and how much a sleep takes are learned from the vault's own logs.
 """
 
@@ -253,7 +256,7 @@ def cmd_restore(a):
 def retired(v):
     """Point out sb.toml settings of older versions that are no longer read."""
     if v.ignored:
-        print(f"note: sb.toml sets {'; '.join(v.ignored)}; these are no longer read (sb learns them from the logs) "
+        print(f"note: sb.toml sets {'; '.join(v.ignored)}; these are no longer read (sb fixes them or learns them from the logs) "
               "and can be removed")
 
 
@@ -397,13 +400,15 @@ def cmd_review(a):
 
 def cmd_rules(a):
     from importlib.resources import files
+    lim = LIMITS
     try:
-        b = usage.budget(find_vault())
+        v = find_vault()
+        b, lim = usage.budget(v), v.cfg["limits"]
     except SbError as e:
         if not str(e).startswith(("no vault found", "SB_VAULT=")):  # a broken sb.toml is reported
             raise
         b = usage.B0  # no vault: the start value
-    vals = {**LIMITS, **LIFECYCLE, "sleep_budget": b, "sleep_days": usage.WEEK, "forget_budget": b}
+    vals = {**lim, **LIFECYCLE, "sleep_budget": b, "sleep_days": usage.WEEK, "forget_budget": b}
     text = files("scientific_brain").joinpath("RULES.md").read_text(encoding="utf-8")
     print(re.sub(r"\{(\w+)\}", lambda m: str(vals.get(m[1], m[0])), text), end="")
 

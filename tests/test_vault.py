@@ -1,6 +1,6 @@
 import pytest
 
-from helpers import make_vault, sb
+from helpers import add_note, make_vault, sb
 from scientific_brain.vault import ParseError, SbError, Vault, find_vault, parse_frontmatter
 
 OK = "---\ntitle: A: b\ntype: finding\nsources: [a/b.py, \"c, d\"]\ncreated: 2026-11-08\nwhy: \"quoted\"\nempty:\n---\n\nGist: one.\nstill one.\n\nSecond.\n"
@@ -125,3 +125,37 @@ def test_toml_reader_falls_back_to_tomli_on_python_310(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(vm)
+
+
+def limits_vault(tmp_path, toml):
+    v = make_vault(tmp_path)
+    (v / "sb.toml").write_text((v / "sb.toml").read_text() + toml, encoding="utf-8")
+    return v
+
+
+def test_body_words_is_read_from_limits_and_defaults_to_600(tmp_path):
+    assert Vault(make_vault(tmp_path / "a")).cfg["limits"]["body_words"] == 600
+    assert Vault(limits_vault(tmp_path / "b", "\n[limits]\nbody_words = 40\n")).cfg["limits"]["body_words"] == 40
+    assert not Vault(limits_vault(tmp_path / "c", "\n[limits]\nbody_words = 40\n")).ignored
+
+
+@pytest.mark.parametrize("val", ['"40"', "true", "0", "-5", "40.5"])
+def test_body_words_of_the_wrong_type_or_range_is_an_error(tmp_path, val):
+    from scientific_brain.vault import SbError, Vault  # a reload above may have replaced the classes
+    with pytest.raises(SbError, match="body_words"):
+        Vault(limits_vault(tmp_path, f"\n[limits]\nbody_words = {val}\n"))
+
+
+def test_other_limits_are_ignored_and_reported(tmp_path):
+    v = Vault(limits_vault(tmp_path, "\n[limits]\ntitle_words = 3\nbody_words = 40\nlinks = 1\n"))
+    assert v.ignored == ["[limits] title_words, links"]
+    assert v.cfg["limits"]["title_words"] == 16 and v.cfg["limits"]["links"] == 8 and v.cfg["limits"]["body_words"] == 40
+
+
+def test_check_flags_a_body_over_the_vaults_limit_and_names_the_setting(tmp_path):
+    v = limits_vault(tmp_path, "\n[limits]\nbody_words = 20\n")
+    add_note(v, "wordy-note", body="word " * 25)
+    code, out, _ = sb(v, "check")
+    assert code != 0 and "body has more than 20 words (sb.toml [limits] body_words)" in out
+    (v / "sb.toml").write_text((v / "sb.toml").read_text().replace("= 20", "= 30"), encoding="utf-8")
+    assert "wordy-note" not in sb(v, "check")[1]

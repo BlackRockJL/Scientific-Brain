@@ -4,6 +4,7 @@ import pytest
 from helpers import add_note, make_vault, sb
 
 from scientific_brain.schema import TYPES
+from scientific_brain.vault import Vault
 
 
 def test_init_creates_vault_and_refuses_second_run(tmp_path):
@@ -137,11 +138,11 @@ def test_rules_prints_the_contract():
     assert code == 0 and "Scientific Brain" in out and len(out.split()) <= 1200
 
 
-def test_rules_fill_in_the_constants_and_ignore_a_retired_sb_toml(tmp_path):
+def test_rules_fill_in_the_constants_and_the_vaults_body_words(tmp_path):
     v = make_vault(tmp_path)
-    (v / "sb.toml").write_text("[limits]\ntitle_words = 20\nbody_words = 700\nlinks = 9\n", encoding="utf-8")  # sb <= 0.2.1: not read
+    (v / "sb.toml").write_text("[limits]\ntitle_words = 20\nbody_words = 700\nlinks = 9\n", encoding="utf-8")  # only body_words is read
     out = sb(v, "rules")[1]
-    assert "at most 16 words, body at most 600 words, at most 8 links" in out and "{" not in out
+    assert "at most 16 words, body at most 700 words, at most 8 links" in out and "{" not in out
     assert "at most 16 words" in sb("unused", "rules")[1]
 
 
@@ -205,3 +206,10 @@ def test_recall_is_silent_about_a_due_sleep_while_one_runs(tmp_path):
     assert "sleep due" in sb(v, "recall", "quasar")[1]
     sb(v, "sleep", "begin")
     assert "sleep due" not in sb(v, "recall", "quasar")[1]
+
+
+def test_init_writes_the_body_words_limit(tmp_path):
+    root = tmp_path / "v"
+    sb(root, "init", str(root))
+    text = (root / "sb.toml").read_text()
+    assert "[limits]\nbody_words = 600\n" in text and Vault(root).cfg["limits"]["body_words"] == 600

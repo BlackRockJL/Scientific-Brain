@@ -1,4 +1,4 @@
-"""sb 0.3 reads no settings but the set-up: old sb.toml sections are reported and ignored, broken log lines never crash."""
+"""sb 0.3 reads no settings but the set-up and body_words: old sb.toml sections are reported and ignored, broken log lines never crash."""
 from datetime import date, timedelta
 
 import pytest
@@ -12,7 +12,6 @@ TODAY = date(2026, 11, 8)
 OLD_TOML = """
 [limits]
 title_words = 1
-body_words = 5
 links = 0
 min_coverage = 0.99
 [activation]
@@ -57,7 +56,7 @@ def old_vault(tmp_path, extra=OLD_TOML):
 def test_an_old_sb_toml_loads_and_lists_the_retired_sections(tmp_path):
     v = Vault(old_vault(tmp_path))
     assert [x.split(" ")[0] for x in v.ignored] == ["[limits]", "[activation]", "[lifecycle]"]
-    assert v.ignored[0] == "[limits] title_words, body_words, links, min_coverage"
+    assert v.ignored[0] == "[limits] title_words, links, min_coverage"
     assert v.cfg["limits"] == vault_mod.LIMITS and v.cfg["lifecycle"] == vault_mod.LIFECYCLE  # nothing of it reaches the values
     assert v.cfg["projects"] == ["heat", "_general"] and v.cfg["source_roots"] == ["sources"]  # the set-up is still read
 

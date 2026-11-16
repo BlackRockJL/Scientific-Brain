@@ -31,11 +31,12 @@ TEMP = re.compile(r"\..+\.[0-9a-f]{8}\.tmp\Z")  # name of a temporary file of wr
 DEFAULTS = {"projects": [], "folder_map": {}, "source_roots": [], "bibtex": [],
             "index": {"skip_sections": []},
             "update": {"auto": True}}
-# Fixed by design, not settable: what a note may hold, how search and condensing match, inbox and promotion limits.
+# Fixed by design, not settable: what a note may hold (but body_words: only the style depends on it, so [limits] body_words sets it per vault;
+# sb itself needs short titles and few links: slug, dreaming), how search and condensing match, inbox and promotion limits.
 # What depends on the vault (stability of notes, sleep budget) is learned from its logs, see usage.py.
 LIMITS = {"title_words": 16, "body_words": 600, "links": 8, "min_coverage": 0.5}
 LIFECYCLE = {"inbox_wait_days": 30, "new_per_day": 3, "condense_coverage": 0.6, "max_promotion_rate": 0.25, "dream_pairs": 5}
-RETIRED = ("limits", "activation", "lifecycle")  # sb.toml sections of sb <= 0.2.1; read no more, reported by check
+RETIRED = ("activation", "lifecycle")  # sb.toml sections of sb <= 0.2.1; read no more, reported by check (of [limits] only body_words is read)
 
 
 class SbError(Exception):
@@ -202,7 +203,15 @@ class Vault:
         self.cfg = {k: (DEFAULTS[k] | user.get(k, {}) if isinstance(DEFAULTS[k], dict) else user.get(k, DEFAULTS[k]))
                     for k in DEFAULTS}
         self.cfg["limits"], self.cfg["lifecycle"] = dict(LIMITS), dict(LIFECYCLE)
-        self.ignored = [f"[{k}]" + (" " + ", ".join(user[k]) if isinstance(user[k], dict) else "") for k in RETIRED if k in user]
+        lim = user.get("limits")
+        if isinstance(lim, dict) and "body_words" in lim:
+            words = lim["body_words"]
+            if not isinstance(words, int) or isinstance(words, bool) or words < 1:
+                raise SbError(f"{self.root / 'sb.toml'}: '[limits] body_words' has the wrong type or is not above 0")
+            self.cfg["limits"]["body_words"] = words
+        other = [x for x in lim if x != "body_words"] if isinstance(lim, dict) else None  # keys of [limits] that are not read
+        self.ignored = (["[limits]" + (" " + ", ".join(other) if other is not None else "")] if other != [] and "limits" in user else []) + [
+            f"[{k}]" + (" " + ", ".join(user[k]) if isinstance(user[k], dict) else "") for k in RETIRED if k in user]
         self.sb_dir = self.root / ".sb"
 
     def scan(self, loc: str) -> dict:
