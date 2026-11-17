@@ -73,8 +73,17 @@ def test_editable_or_plain_install_does_nothing(tmp_path, monkeypatch):
     for info in ({"url": "file:///x", "dir_info": {"editable": True}}, None):
         f = Fake(monkeypatch, info, claude=False)
         assert update.update(v) == [] and f.calls == []
-    f = Fake(monkeypatch, {"url": "file:///x", "dir_info": {"editable": True}})  # claude on PATH: plugin left alone too
-    assert update.update(v) == [] and f.calls == []
+
+
+def test_editable_install_keeps_its_cli_but_updates_the_plugin(tmp_path, monkeypatch):
+    """A developer install never touches its CLI, yet the plugin still follows the release (else it lags behind)."""
+    v = vault(tmp_path)
+    f = Fake(monkeypatch, {"url": "file:///x", "dir_info": {"editable": True}},
+             plugin={"success": True, "oldVersion": "0.3.1", "newVersion": "0.3.4"})
+    assert update.update(v) == ["plugin updated; restart Claude Code to load it"]
+    assert f.names() == ["claude plugin", "claude plugin"] and not any(c[0] in ("git", "pipx") for c in f.calls)
+    f = Fake(monkeypatch, {"url": "file:///x", "dir_info": {"editable": True}}, plugin={"oldVersion": "0.3.4", "newVersion": "0.3.4"})
+    assert update.update(v) == [] and len(f.calls) == 2
 
 
 def test_switched_off_by_config_and_env(tmp_path, monkeypatch):

@@ -27,10 +27,10 @@ The agent then works through these steps:
 
 1. **Prerequisites.** Python ≥ 3.10, git and [pipx](https://pipx.pypa.io) (macOS `brew install pipx`, Debian
    or Ubuntu `sudo apt install pipx`, then `pipx ensurepath` and a new shell).
-2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.3.4`
+2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.3.5`
    instead keeps this version.
    ```bash
-   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.3.4
+   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.3.5
    sb --version
    ```
 3. **Create the vault.** `sb init ~/research-brain` (any folder works, see [Where the vault lives](#where-the-vault-lives)).
@@ -151,8 +151,8 @@ The vault can be versioned with git; `sb init` writes a `.gitignore` for the sea
 ## Update and uninstall
 
 Each sleep first brings the CLI and the plugin up to the newest release tag `vX.Y.Z` (never `HEAD`). This
-applies to installs without a pin or pinned as `@refs/tags/vX.Y.Z`; any other pin and editable installs only get
-a hint. A new plugin loads after a restart of Claude Code. Switch it off with `auto = false` under `[update]` in
+applies to installs without a pin or pinned as `@refs/tags/vX.Y.Z`; any other pin and editable installs keep
+their CLI, while the plugin updates all the same. A new plugin loads after a restart of Claude Code. Switch it off with `auto = false` under `[update]` in
 `sb.toml` or with `SB_NO_UPDATE=1` (`true` or `yes` also work).
 
 By hand: `pipx install --force git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/<tag>` and

@@ -125,12 +125,7 @@ def update(v: Vault) -> list[str]:
     """Message lines; empty means nothing to say."""
     if os.environ.get("SB_NO_UPDATE", "").strip().lower() in ("1", "true", "yes") or not v.cfg["update"]["auto"]:
         return []
-    try:
-        if ((_direct_url() or {}).get("dir_info") or {}).get("editable"):
-            return []  # a developer install leaves both the CLI and the plugin alone
-    except Exception:  # noqa: BLE001 - unreadable direct_url.json: the steps look again and report
-        pass
-    note: list[str] = []
+    note: list[str] = []  # a developer install keeps its CLI (see _cli); the plugin follows the newest release all the same
     for step in (_cli, _plugin):
         try:
             step(note)
