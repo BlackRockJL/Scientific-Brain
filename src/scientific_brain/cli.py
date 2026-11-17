@@ -28,9 +28,11 @@ SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this 
 # skip_sections = []                         # headings whose sections stay out of the full-text search
 # [update]
 # auto = true                                # each sleep updates the CLI and the plugin to the latest release tag (false or SB_NO_UPDATE=1 stops it)
-# Every vault chooses the longest note body (in words) itself:
+# Every vault chooses what a note may hold itself: words of the title and the body, links:
 [limits]
+title_words = 16
 body_words = 600
+links = 8
 # Nothing else is set here: how long notes rest and how much a sleep takes are learned from the vault's own logs.
 """
 

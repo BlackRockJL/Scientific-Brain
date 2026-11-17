@@ -1,4 +1,4 @@
-"""sb 0.3 reads no settings but the set-up and body_words: old sb.toml sections are reported and ignored, broken log lines never crash."""
+"""sb 0.3 reads no settings but the set-up and the note limits: old sb.toml sections are reported and ignored, broken log lines never crash."""
 from datetime import date, timedelta
 
 import pytest
@@ -11,8 +11,6 @@ TODAY = date(2026, 11, 8)
 
 OLD_TOML = """
 [limits]
-title_words = 1
-links = 0
 min_coverage = 0.99
 [activation]
 recall = 5.0
@@ -56,7 +54,7 @@ def old_vault(tmp_path, extra=OLD_TOML):
 def test_an_old_sb_toml_loads_and_lists_the_retired_sections(tmp_path):
     v = Vault(old_vault(tmp_path))
     assert [x.split(" ")[0] for x in v.ignored] == ["[limits]", "[activation]", "[lifecycle]"]
-    assert v.ignored[0] == "[limits] title_words, links, min_coverage"
+    assert v.ignored[0] == "[limits] min_coverage"
     assert v.cfg["limits"] == vault_mod.LIMITS and v.cfg["lifecycle"] == vault_mod.LIFECYCLE  # nothing of it reaches the values
     assert v.cfg["projects"] == ["heat", "_general"] and v.cfg["source_roots"] == ["sources"]  # the set-up is still read
 
@@ -84,7 +82,7 @@ def test_the_old_values_have_no_effect_anywhere(tmp_path):
     for args in (("sleep", "plan"), ("stats",), ("check",), ("rules",), ("recall", "stability", "limit"), ("review",)):
         a, b = sb(old, *args), sb(clean, *args)
         assert a[0] == b[0] == 0, args
-        assert body(a[1]) == body(b[1]), args  # title_words = 1, links = 0, sleep_budget = 1 ... change nothing
+        assert body(a[1]) == body(b[1]), args  # min_coverage = 0.99, sleep_budget = 1 ... change nothing
     assert "touched: 11 of 40" in sb(old, "sleep", "plan")[1]
     assert sb(old, "new", "finding", "a-long-slug-name", "-p", "heat", "--why", "own measurement")[0] == 0  # new_per_day = 0 would warn at once
 

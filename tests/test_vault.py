@@ -139,17 +139,19 @@ def test_body_words_is_read_from_limits_and_defaults_to_600(tmp_path):
     assert not Vault(limits_vault(tmp_path / "c", "\n[limits]\nbody_words = 40\n")).ignored
 
 
+@pytest.mark.parametrize("key", ["title_words", "body_words", "links"])
 @pytest.mark.parametrize("val", ['"40"', "true", "0", "-5", "40.5"])
-def test_body_words_of_the_wrong_type_or_range_is_an_error(tmp_path, val):
+def test_a_limit_of_the_wrong_type_or_range_is_an_error(tmp_path, key, val):
     from scientific_brain.vault import SbError, Vault  # a reload above may have replaced the classes
-    with pytest.raises(SbError, match="body_words"):
-        Vault(limits_vault(tmp_path, f"\n[limits]\nbody_words = {val}\n"))
+    with pytest.raises(SbError, match=key):
+        Vault(limits_vault(tmp_path, f"\n[limits]\n{key} = {val}\n"))
 
 
-def test_other_limits_are_ignored_and_reported(tmp_path):
-    v = Vault(limits_vault(tmp_path, "\n[limits]\ntitle_words = 3\nbody_words = 40\nlinks = 1\n"))
-    assert v.ignored == ["[limits] title_words, links"]
-    assert v.cfg["limits"]["title_words"] == 16 and v.cfg["limits"]["links"] == 8 and v.cfg["limits"]["body_words"] == 40
+def test_title_words_and_links_are_read_and_other_limits_ignored(tmp_path):
+    v = Vault(limits_vault(tmp_path, "\n[limits]\ntitle_words = 40\nbody_words = 40\nlinks = 30\nmin_coverage = 0.9\n"))
+    assert v.ignored == ["[limits] min_coverage"]
+    assert (v.cfg["limits"]["title_words"], v.cfg["limits"]["body_words"], v.cfg["limits"]["links"]) == (40, 40, 30)
+    assert v.cfg["limits"]["min_coverage"] == 0.5
 
 
 def test_check_flags_a_body_over_the_vaults_limit_and_names_the_setting(tmp_path):
@@ -159,3 +161,12 @@ def test_check_flags_a_body_over_the_vaults_limit_and_names_the_setting(tmp_path
     assert code != 0 and "body has more than 20 words (sb.toml [limits] body_words)" in out
     (v / "sb.toml").write_text((v / "sb.toml").read_text().replace("= 20", "= 30"), encoding="utf-8")
     assert "wordy-note" not in sb(v, "check")[1]
+
+
+def test_check_follows_the_vaults_title_and_link_limits(tmp_path):
+    v = limits_vault(tmp_path, "\n[limits]\ntitle_words = 3\nlinks = 1\n")
+    add_note(v, "long-title-note", title="one two three four five")
+    code, out, _ = sb(v, "check")
+    assert code != 0 and "title has more than 3 words (sb.toml [limits] title_words)" in out
+    (v / "sb.toml").write_text((v / "sb.toml").read_text().replace("title_words = 3", "title_words = 5"), encoding="utf-8")
+    assert "long-title-note" not in sb(v, "check")[1]

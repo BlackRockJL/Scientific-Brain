@@ -134,9 +134,9 @@ def check(v: Vault, only=None):
             if s not in n.headings:
                 add("error", f"{rel}:{n.body_line}", f"type '{typ}' requires a section '## {s}'")
         if n.location == "notes":
-            for ok, msg in ((len(n.get("title").split()) <= lim["title_words"], f"title has more than {lim['title_words']} words"),
+            for ok, msg in ((len(n.get("title").split()) <= lim["title_words"], f"title has more than {lim['title_words']} words (sb.toml [limits] title_words)"),
                             (len(n.body.split()) <= lim["body_words"], f"body has more than {lim['body_words']} words (sb.toml [limits] body_words)"),
-                            (len(n.targets) <= lim["links"], f"more than {lim['links']} links")):
+                            (len(n.targets) <= lim["links"], f"more than {lim['links']} links (sb.toml [limits] links)")):
                 if not ok:
                     add("error", f"{rel}:{n.body_line}", msg)
         for t in n.targets:

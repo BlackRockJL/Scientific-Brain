@@ -1,2 +1,2 @@
 """Scientific Brain: a lean second brain for research notes."""
-__version__ = "0.3.2"
+__version__ = "0.3.3"

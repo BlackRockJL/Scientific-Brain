@@ -31,12 +31,13 @@ TEMP = re.compile(r"\..+\.[0-9a-f]{8}\.tmp\Z")  # name of a temporary file of wr
 DEFAULTS = {"projects": [], "folder_map": {}, "source_roots": [], "bibtex": [],
             "index": {"skip_sections": []},
             "update": {"auto": True}}
-# Fixed by design, not settable: what a note may hold (but body_words: only the style depends on it, so [limits] body_words sets it per vault;
-# sb itself needs short titles and few links: slug, dreaming), how search and condensing match, inbox and promotion limits.
+# Fixed by design, not settable: how search and condensing match, inbox and promotion limits. What a note may hold depends on the
+# vault's writing style, so [limits] title_words, body_words and links set it per vault (min_coverage stays fixed).
 # What depends on the vault (stability of notes, sleep budget) is learned from its logs, see usage.py.
 LIMITS = {"title_words": 16, "body_words": 600, "links": 8, "min_coverage": 0.5}
 LIFECYCLE = {"inbox_wait_days": 30, "new_per_day": 3, "condense_coverage": 0.6, "max_promotion_rate": 0.25, "dream_pairs": 5}
-RETIRED = ("activation", "lifecycle")  # sb.toml sections of sb <= 0.2.1; read no more, reported by check (of [limits] only body_words is read)
+PER_VAULT = ("title_words", "body_words", "links")  # the keys of [limits] that sb.toml sets
+RETIRED = ("activation", "lifecycle")  # sb.toml sections of sb <= 0.2.1; read no more, reported by check
 
 
 class SbError(Exception):
@@ -204,12 +205,13 @@ class Vault:
                     for k in DEFAULTS}
         self.cfg["limits"], self.cfg["lifecycle"] = dict(LIMITS), dict(LIFECYCLE)
         lim = user.get("limits")
-        if isinstance(lim, dict) and "body_words" in lim:
-            words = lim["body_words"]
-            if not isinstance(words, int) or isinstance(words, bool) or words < 1:
-                raise SbError(f"{self.root / 'sb.toml'}: '[limits] body_words' has the wrong type or is not above 0")
-            self.cfg["limits"]["body_words"] = words
-        other = [x for x in lim if x != "body_words"] if isinstance(lim, dict) else None  # keys of [limits] that are not read
+        for k in PER_VAULT if isinstance(lim, dict) else ():
+            if k in lim:
+                val = lim[k]
+                if not isinstance(val, int) or isinstance(val, bool) or val < 1:
+                    raise SbError(f"{self.root / 'sb.toml'}: '[limits] {k}' has the wrong type or is not above 0")
+                self.cfg["limits"][k] = val
+        other = [x for x in lim if x not in PER_VAULT] if isinstance(lim, dict) else None  # keys of [limits] that are not read
         self.ignored = (["[limits]" + (" " + ", ".join(other) if other is not None else "")] if other != [] and "limits" in user else []) + [
             f"[{k}]" + (" " + ", ".join(user[k]) if isinstance(user[k], dict) else "") for k in RETIRED if k in user]
         self.sb_dir = self.root / ".sb"
