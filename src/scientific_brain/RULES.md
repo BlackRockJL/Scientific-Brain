@@ -79,9 +79,10 @@ the sleep agent. It works in this order:
      --superseded-by`, or keep both with sharper titles and cues.
    - Forget: archive each candidate with `--why faded`, or keep it with `sb sleep veto <slug> "one sentence"`.
      A veto counts as use.
-   - Verify: for each new, changed or never verified note, check its numbers against the listed sources and
-     compare it with the listed neighbours for contradictions; fix or archive. Then the most active notes listed. After checking,
-     `sb sleep verified <slug> ...` sets `verified` without touching `updated`. Only verified notes leave the list. An answered question is archived with the answering note as successor.
+   - Verify: check each new, changed or unverified note against its listed sources and neighbours; fix or
+     archive. Then the most active notes listed. `sb sleep verified <slug> ...` marks a checked note; only
+     verified notes leave the list. A note no source or neighbour can check: `sb sleep unverifiable <slug>
+     "reason"`; one you lacked time for stays open. Archive an answered question with its answer as successor.
    - Dream: link a pair (with a why) if they meet in substance, not only in words; else `sb sleep unrelated`.
 3. `sb sleep done "one-line summary"` expires the due inbox lines the plan showed and you left open, logs the
    sleep and prints a summary, each expired line apart and the dream count. It warns when more than

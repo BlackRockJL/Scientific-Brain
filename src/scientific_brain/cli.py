@@ -328,6 +328,9 @@ def cmd_sleep(a):
     elif a.sub == "unrelated":
         sleep.unrelated(v, a.a, a.b, a.reason, day)
         print(f"pair {a.a} ~ {a.b} logged as unrelated; it returns after the cooldown")
+    elif a.sub == "unverifiable":
+        sleep.unverifiable(v, a.slug, a.reason, day)
+        print(f"{a.slug} parked as unverifiable; it returns when changed or after its rest")
     elif a.sub == "verified":
         if sleep.started(v) is None:
             raise SbError("sleep verified works only during a sleep (sb sleep begin)")
@@ -500,7 +503,7 @@ def main(argv=None) -> int:
     sp = cmd("restore", cmd_restore, "move an archived note back")
     sp.add_argument("slug")
     sp.add_argument("--force", action="store_true", help="restore a note that was archived as wrong")
-    sp = cmd("sleep", cmd_sleep, "run a sleep: begin, plan, veto, unrelated, verified, done; baseline").add_subparsers(dest="sub", required=True)
+    sp = cmd("sleep", cmd_sleep, "run a sleep: begin, plan, veto, unrelated, verified, unverifiable, done; baseline").add_subparsers(dest="sub", required=True)
     sp.add_parser("begin", help="start a sleep").add_argument("--force", action="store_true", help="replace a running sleep")
     sp.add_parser("plan", help="candidate lists for the five phases").add_argument("-o", "--out", help="write to this file")
     q = sp.add_parser("veto", help="keep a forget candidate")
@@ -511,6 +514,9 @@ def main(argv=None) -> int:
     q.add_argument("b")
     q.add_argument("reason")
     sp.add_parser("verified", help="mark notes as checked").add_argument("slugs", nargs="+")
+    q = sp.add_parser("unverifiable", help="park a note no source or neighbour can check; it returns when changed or after a rest")
+    q.add_argument("slug")
+    q.add_argument("reason")
     sp.add_parser("done", help="end the sleep").add_argument("summary")
     sp.add_parser("baseline", help="accept all notes as checked in their current form, e.g. after an import").add_argument(
         "--seed", type=int, metavar="DAYS", help="give notes without use a start use, so they fade one by one within DAYS")

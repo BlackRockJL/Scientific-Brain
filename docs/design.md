@@ -150,6 +150,12 @@ The plan is computed without a model; the agent only judges.
   plan listed after their last `verified` go to the back, the longest unlisted first (`.sb/listed.tsv`), so notes that
   cannot be checked do not starve the others, while a checked note edited again keeps its place; then edited notes before never-checked ones, newer first, ties by slug. Then, among the
   twenty most active notes, the ten with the oldest `verified`.
+  A note that neither a source nor its neighbours can check is parked with `sleep unverifiable <slug> "reason"`
+  (only a note of this sleep's verify list that is not yet checked; refused while one of its `sources:`, or a word of
+  one with a `/`, exists as a file; `.sb/unverifiable.tsv` holds date, slug, reason, renames so far and content hash).
+  It leaves the backlog, the plan, the left-over count and the plan size until its content changes, a source file
+  appears, or its rest ends. The rest is that of a rejected pair (see Dream), grown only by parkings of the
+  note's present content, longer for each further one; a restored note (`restore --force`) is not parked.
 - **Dream:** up to five pairs of notes that are not linked yet, outside the budget so that they are
   never crowded out. Seeds are the notes new or changed since the last sleep, then the most active ones (at most
   20); for each, a search with its eight rarest words gives related notes, which are cut by the checks for
@@ -168,7 +174,9 @@ The plan is computed without a model; the agent only judges.
   with the same stability keeps the memory of them as light as the memory of notes.
 - **Budget:** a plan takes as many items as recent sleeps managed, learned from the size of each plan and the
   items it left undone (an inbox line not booked, a candidate neither archived nor vetoed, a changed note
-  unverified), which `sleep done` logs. It starts at 40. A sleep that left more than a tenth of a full plan undone (one
+  unverified), which `sleep done` logs. A verify note parked as unverifiable is neither left nor part of the logged plan
+  size, so unverifiability is no lack of capacity; their number is the eleventh column of `sleep.tsv` and is named
+  in the closing line. The budget reads it only to tell whether the plan was full, so parking hides no unfinished plan. It starts at 40. A sleep that left more than a tenth of a full plan undone (one
   the budget filled; a smaller plan says nothing about the agent) sets the next plan to what it did and marks its
   size as too large, unless what it did is below 10; a sleep that finished a full plan (at most a tenth left) lets it grow by a quarter,
   but only halfway towards a size known to be too large, and once just below it, that limit moves up by one per

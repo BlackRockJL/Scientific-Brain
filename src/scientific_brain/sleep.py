@@ -16,6 +16,7 @@ SLEEPING, SNAP = "sleeping", "snapshot.tsv"  # .sb/ files: running sleep (start 
 DIGEST = "2"  # snapshot rows of this version hash a note without its ## Links section and with masked link targets
 HOT = 20  # verify (b) looks at the HOT most active notes and takes the oldest verified of them
 UNRELATED = "unrelated.tsv"  # .sb/ file: date, slug, slug, reason, renames so far of every pair judged unrelated
+UNVERIFIABLE = "unverifiable.tsv"  # .sb/ file: date, slug, reason, renames so far, digest of every note parked as unverifiable
 LISTED = "listed.tsv"  # .sb/ file: date, slug, renames so far of every unchecked note a sleep plan listed under verify
 SEEDS, FAR_POOL = 20, 50  # dream: notes that seed the near pairs; most active concepts and derivations for the far pair
 MIN_PROMOTION = 10  # the promotion warning needs at least this many settled lines to mean anything
@@ -301,7 +302,8 @@ def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
 def backlog(v: Vault, day: date) -> dict:
     """Work waiting for a sleep: undecided inbox lines, notes not checked since they changed, forget candidates."""
     notes, snap = load(v), snapshot(v)
-    return {"inbox": len(inbox.undecided(v, day)), "verify": sum(not checked(n, snap) for n in notes.values()),
+    rest = parked(v, day, notes)
+    return {"inbox": len(inbox.undecided(v, day)), "verify": sum(not checked(n, snap) and s not in rest for s, n in notes.items()),
             "forget": len(usage.forget_candidates(v, day))}
 
 
@@ -385,7 +387,8 @@ def plan(v: Vault, idx, day: date) -> str:
             if cov >= lc["condense_coverage"]:
                 found[pair] = max(cov, found.get(pair, 0))
     found_all = sorted(found, key=lambda p: (len({notes[s].folder for s in p}) > 1, -found[p], sorted(p)))
-    unchecked = sorted(sorted(s for s, n in notes.items() if not checked(n, snap)), key=lambda s: str(notes[s].get("created")), reverse=True)
+    rest = parked(v, day, notes, s0)
+    unchecked = sorted(sorted(s for s, n in notes.items() if not checked(n, snap) and s not in rest), key=lambda s: str(notes[s].get("created")), reverse=True)
     seen = last_listed(v, notes)  # what earlier plans listed and nobody verified since goes to the back, so nothing starves
     changed = sorted(unchecked, key=lambda s: (seen.get(s, -1), s not in snap))  # then edited before never-checked, newest first
     room = max(budget - len(touched), 0)
@@ -397,7 +400,7 @@ def plan(v: Vault, idx, day: date) -> str:
     # the caps only keep forget and condense from crowding out the rest; budget left over goes to what they held back
     forget += [x for x in cands[cap_f:] if take(x[0])]
     dup += [p for p in found_all[cap_c:] if take(*p)]
-    hot = sorted((x for x in sc if x[0] not in changed), key=usage.active)[:HOT]
+    hot = sorted((x for x in sc if x[0] not in changed and x[0] not in rest), key=usage.active)[:HOT]
     verify_b = [x for x in sorted(hot, key=lambda x: (str(notes[x[0]].get("verified") or ""), x[0]))[:10] if take(x[0])]
 
     if again := live and bool(remembered(v, "dreamed") or remembered(v, "dream")):  # one set per sleep: a new plan repeats the open pairs
@@ -433,8 +436,9 @@ def plan(v: Vault, idx, day: date) -> str:
     out += [f"- {s} [{t}] R={r:.2f} stability {S:.0f} days, last used {last_use.get(s)}" for s, t, r, S in forget]
     out += ["", f"## 4. Verify: {len(verify_a)} new or changed, {len(verify_b)} most active",
             "Check numbers against the sources and compare with the neighbours; then `sb sleep verified <slug>`. "
-            "Mark only what you checked: that a note came from an inbox line is no check, and a note you could not "
-            "test stays unverified and returns."]
+            "Mark only what you checked: that a note came from an inbox line is no check. A note that neither a source "
+            "nor its neighbours can check goes to `sb sleep unverifiable <slug> \"reason\"` (refused while a source file "
+            "exists); a note you only lacked time for stays open and returns, and shrinks the next plan."]
     for s in verify_a:
         n = notes[s]
         out.append(f"- {s} ({'changed' if s in snap else 'new'}) [{n.get('type')}, {n.folder}] sources: " + (", ".join(n.get("sources", [])) or "none"))
@@ -483,6 +487,48 @@ def locked(v: Vault, day: date, s0: dict | None = None) -> set:
         if usage.retrievability(S, (day - last).days) >= 0.5 - usage.EPS:
             out.add(p)
     return out
+
+
+def parked(v: Vault, day: date, notes=None, s0: dict | None = None) -> set:
+    """Current slugs of notes parked as unverifiable that still rest: unchanged since the last parking, and like a
+    pair in `locked` resting for the stability the vault's initial one grows to by each further parking."""
+    fol, rows = usage.follower(v), {}
+    for d, s, _, n, h in v.rows(UNVERIFIABLE, 5):
+        try:
+            if (dd := date.fromisoformat(d)) <= day:
+                rows.setdefault(fol(s, usage.count(n)), []).append((dd, h))
+        except ValueError:
+            continue
+    if not rows:
+        return set()
+    notes = load(v) if notes is None else notes
+    base, snap, out = (s0 or usage.learned(v, day))[""], snapshot(v), set()
+    for s, rs in rows.items():
+        if s not in notes or snap.get(s) == "-" or source_found(v, notes[s]):
+            continue
+        if not (ds := [d for d, h in rs if h == digest(notes[s])]) or rs[-1][1] != digest(notes[s]):
+            continue
+        S, last = usage.replay({d: 1.0 for d in ds}, None, base)
+        if usage.retrievability(S, (day - last).days) >= 0.5 - usage.EPS:
+            out.add(s)
+    return out
+
+
+def source_found(v: Vault, n) -> str | None:
+    """First path in the note's `sources:` that exists as a local file: an entry as a whole, or a word of it with a `/`."""
+    roots = [v.root / r for r in v.cfg["source_roots"]] or [v.root]
+    for p in n.get("sources", []):
+        if not p or p == "TODO":
+            continue
+        for c in [p] + [w for w in (x.strip("()[]{}<>,;:\"'").removesuffix(".") for x in p.split()) if "/" in w]:
+            if "://" in c or c == "TODO" or not c:
+                continue
+            try:
+                if any((r / c).exists() for r in roots):
+                    return c
+            except (OSError, ValueError):
+                pass
+    return None
 
 
 def held_pairs(v: Vault, notes, held) -> list:
@@ -579,6 +625,31 @@ def unrelated(v: Vault, a: str, b: str, reason: str, day: date):
     v.append(UNRELATED, day.isoformat(), *sorted((a, b)), reason, len(v.rows("renames.tsv", 5)))
 
 
+def planned(v: Vault, notes) -> set:
+    """Current slugs of the notes the running sleep's plan listed under verify."""
+    fol, m = usage.follower(v), usage.renames(v)
+    return {fol(x, n) if n is not None else current(m, notes, x)
+            for item, n in remembered_rows(v, "work") for k, _, x in [item.partition(":")] if k == "verify"}
+
+
+def unverifiable(v: Vault, slug: str, reason: str, day: date):
+    """Park a note no source or neighbour can check; it rests like a rejected pair (see `parked`)."""
+    if started(v) is None:
+        raise SbError("sleep unverifiable works only during a sleep (sb sleep begin)")
+    if not (rel := v.find(slug, ("notes",))):
+        raise SbError(f"no note '{slug}' in notes/")
+    if not clean(reason):
+        raise SbError("unverifiable needs a reason of one sentence")
+    n = v.read(rel)
+    if slug not in planned(v, {slug: n}):
+        raise SbError(f"{slug} is not on this sleep's verify list")
+    if checked(n, snapshot(v)):
+        raise SbError(f"{slug} is checked; nothing to park")
+    if p := source_found(v, n):
+        raise SbError(f"{slug} has a source at {p}; check it against that")
+    v.append(UNVERIFIABLE, day.isoformat(), slug, reason, len(v.rows("renames.tsv", 5)), digest(n))
+
+
 def mark_verified(v: Vault, slugs, day: date) -> list:
     """Set verified: <day> in the frontmatter, leave updated alone and the line endings as they are; remember the
     hash each note has now, so an edit after the check is not taken as checked; returns the paths."""
@@ -608,19 +679,20 @@ def mark_verified(v: Vault, slugs, day: date) -> list:
 
 
 def leftover(v: Vault, day: date, start: date) -> tuple:
-    """(size, left) of the running sleep: the largest plan it printed, and the work items of its plans still waiting
-    (an inbox line not booked in this sleep, a forget candidate neither archived nor vetoed, a changed note unverified).
-    Called before due lines expire, so an expired line counts as left."""
+    """(size, left, parked) of the running sleep: the largest plan it printed, and the work items of its plans still
+    waiting (an inbox line not booked in this sleep, a forget candidate neither archived nor vetoed, a changed note
+    unverified). A verify note parked as unverifiable is neither left nor part of the size: parking says nothing about
+    capacity; `parked` counts them. Called before due lines expire, so an expired line counts as left."""
     work = dict(remembered_rows(v, "work"))
     size = max((int(x) for x in remembered(v, "size") if x.isascii() and x.isdigit()), default=0)
     if not work:
-        return size, 0
+        return size, 0, 0
     m, fol = usage.renames(v), usage.follower(v)
     booked = {i for i, d, o in booked_now(v, start) if o != "expired"}
     cands = {s for s, *_ in usage.forget_candidates(v, day)}
     notes, snap = load(v), snapshot(v)
-    done = remembered_now(v, "verified", notes)
-    left = 0
+    done, rest = remembered_now(v, "verified", notes), parked(v, day, notes)
+    left = park = 0
     for item, n in work.items():
         kind, _, x = item.partition(":")
         now = fol(x, n) if n is not None else current(m, notes, x)
@@ -629,8 +701,10 @@ def leftover(v: Vault, day: date, start: date) -> tuple:
         elif kind == "forget":
             left += now in cands
         elif kind == "verify":
-            left += now in notes and now not in done and not checked(notes[now], snap)
-    return size, min(left, size)
+            if now in notes and now not in done and not checked(notes[now], snap):
+                park, left = park + (now in rest), left + (now not in rest)
+    size = max(size - park, 0)
+    return size, min(left, size), park
 
 
 def finish(v: Vault, summary: str, day: date) -> list:
@@ -639,14 +713,14 @@ def finish(v: Vault, summary: str, day: date) -> list:
         start = started(v)
         if start is None:
             raise SbError("no sleep is running (sb sleep begin)")
-        planned, left = leftover(v, day, start)
+        size, left, park = leftover(v, day, start)
         expired = inbox.expire_inbox(v, day, remembered(v, "shown"))
         pairs, pend = dict(remembered_rows(v, "dream")), pending(v, start)
         booked = [o for _, d, o in booked_now(v, start) if o not in ("wait", "expired")]
         use = Counter(r[2] for _, r in pend)
         prom = sum(o.startswith("note:") for o in booked)
         v.append("sleep.tsv", usage.stamp(day), len(booked), prom, use["archive"], use["create"], use["veto"], len(expired), summary,
-                 planned, left)
+                 size, left, park)
         release(v, start)
         settle(v)
         m, fol, notes = usage.renames(v), usage.follower(v), load(v)
@@ -661,6 +735,7 @@ def finish(v: Vault, summary: str, day: date) -> list:
             * (rate > top and len(booked) >= MIN_PROMOTION)
             + [f"slept {day}: {len(booked)} inbox lines settled ({prom} promoted), {len(expired)} expired, {use['archive']} archived, "
                f"{use['create']} created, {use['veto']} vetoes"
-               + (f"; {left} of {planned} planned items left undone" if left else "")]
+               + (f"; {left} of {size} planned items left undone" if left else "")
+               + (f"; {park} parked as unverifiable" if park else "")]
             + [f"expired {i}: {sentence(text.get(i, ''), 80)}" for i in expired]
             + [f"dream: {len(linked)} linked, {len(nope)} unrelated, {len(shown) - len(linked) - len(nope)} open of {len(shown)}"] * bool(shown))

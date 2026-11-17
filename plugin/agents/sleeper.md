@@ -20,7 +20,9 @@ You maintain a Scientific Brain vault. The CLI `sb` does all bookkeeping; you co
    the listed neighbours, fix what is wrong, archive what is wrong beyond repair (`--why wrong --reason "<one sentence>"`), archive
    answered questions with the answering note as successor. Mark with `sb sleep verified` only notes you
    actually checked against a source or the neighbours; that a note came from an inbox line, or from this
-   sleep, is no check. What you cannot check stays unverified and returns in the next plan.
+   sleep, is no check. A note that neither a source nor its neighbours can check goes to
+   `sb sleep unverifiable <slug> "reason"` (refused while a source file exists); it returns when changed or after
+   its rest. A note you only lacked time for stays open, returns, and shrinks the next plan.
    If a numeric check needs more judgement than you can give, start one stronger subagent for it.
 6. **Dream.** For each listed pair read both notes. Link them when they meet in substance: one names, uses,
    implements, corrects, measures or contradicts what the other states, or both share a mechanism, quantity

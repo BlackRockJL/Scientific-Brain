@@ -27,10 +27,10 @@ The agent then works through these steps:
 
 1. **Prerequisites.** Python ≥ 3.10, git and [pipx](https://pipx.pypa.io) (macOS `brew install pipx`, Debian
    or Ubuntu `sudo apt install pipx`, then `pipx ensurepath` and a new shell).
-2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.3.3`
+2. **Install the CLI.** This form follows the releases (see [Update](#update-and-uninstall)); `@v0.3.4`
    instead keeps this version.
    ```bash
-   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.3.3
+   pipx install git+https://github.com/BlackRockJL/Scientific-Brain@refs/tags/v0.3.4
    sb --version
    ```
 3. **Create the vault.** `sb init ~/research-brain` (any folder works, see [Where the vault lives](#where-the-vault-lives)).
@@ -130,7 +130,8 @@ different projects, and one deliberately distant pair. The sleeper agent links a
 substance (one uses, implements, corrects, measures or contradicts what the other states, or both share a mechanism,
 quantity or method) and rejects it when they share only words. A sleep shows one set of pairs; planning again
 repeats the open ones. A pair judged unrelated (`sb sleep unrelated <a> <b>
-"reason"`) rests like a note that is not used, and longer once rejected again.
+"reason"`) rests like a note that is not used, and longer once rejected again. A note no source or neighbour can
+check is parked the same way with `sb sleep unverifiable <slug> "reason"`.
 
 ## Where the vault lives
 

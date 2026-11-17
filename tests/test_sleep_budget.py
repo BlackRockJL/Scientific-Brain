@@ -86,7 +86,7 @@ def test_broken_plan_fields_leave_the_budget_alone(tmp_path):
     for bad in (["x", "y"], ["", ""], ["-3", "0"], ["3.5", "0"], ["40", ""], ["", "5"], [" 40", "0"], ["40", "-1"]):
         assert budget(root, entry(*bad)) == 40, bad
     assert budget(root, "2026-11-01T12:00\t0\t0\t0\t0\t0\t0\tsummary\t40") == 40  # nine fields: left is missing
-    assert budget(root, "2026-11-01T12:00\t0\t0\t0\t0\t0\t0\tsummary\t40\t0\textra") == 40  # more fields than known: 'left' is '0 extra'
+    assert budget(root, "2026-11-01T12:00\t0\t0\t0\t0\t0\t0\tsummary\t40\t0 extra") == 40  # 'left' is '0 extra'
     assert budget(root, "garbage", "", "\t\t\t", entry(40, 0)) == 50  # a good row among broken ones still counts
     assert budget(root, entry("9" * 30, 0)) == 50  # a huge number is a number
 
@@ -139,11 +139,11 @@ def work_vault(tmp_path):
 
 def left(root):
     v = Vault(root)
-    return sleep.leftover(v, TODAY, sleep.started(v))
+    return sleep.leftover(v, TODAY, sleep.started(v))[:2]
 
 
 def sleep_rows(root):
-    return [ln.split("\t") for ln in (root / ".sb" / "sleep.tsv").read_text().splitlines()]
+    return [ln.split("\t")[:10] for ln in (root / ".sb" / "sleep.tsv").read_text().splitlines()]  # column 11: parked
 
 
 def test_leftover_counts_the_size_of_the_plan_and_what_is_still_waiting(tmp_path):

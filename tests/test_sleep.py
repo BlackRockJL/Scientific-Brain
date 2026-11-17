@@ -227,7 +227,7 @@ def test_whole_sleep_counts_and_promotion_warning(tmp_path):
     assert sb(v, "new", "finding", "brand-new", "-p", "heat", "--why", "own measurement")[0] == 0
     code, out, _ = sb(v, "sleep", "done", "mixed")
     assert code == 0 and "warning" not in out  # three settled lines are too few for a rate
-    assert tsv(v, "sleep.tsv")[0][1:] == ["3", "2", "1", "1", "1", "0", "mixed", "0", "0"]  # no plan was made: nothing planned, nothing left
+    assert tsv(v, "sleep.tsv")[0][1:10] == ["3", "2", "1", "1", "1", "0", "mixed", "0", "0"]  # no plan was made: nothing planned, nothing left
     assert sb(v, "stats")[1].count("last sleep: 2026-11-08 (0 days ago)") == 1
 
 

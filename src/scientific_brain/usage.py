@@ -321,16 +321,18 @@ def budget(v: Vault) -> int:
     than the budget says nothing about what the agent manages. A sleep that finished a full plan (at most a tenth
     left) lets the plan grow by a quarter, but only halfway towards a size known to be too large; once just below it,
     that limit moves up by one per sleep, so a stronger agent is found again without a plan far beyond what the last
-    one managed. Sleeps before 0.3 logged no size and count not. Within B_MIN..B_MAX."""
+    one managed. Sleeps before 0.3 logged no size and count not. Notes parked as unverifiable (column 11) are out of
+    size and left, yet still fill the plan. Within B_MIN..B_MAX."""
     b, high = B0, None
-    for r in v.rows("sleep.tsv", 10):
+    for r in v.rows("sleep.tsv", 11):
         if not all(x.isascii() and x.isdigit() for x in r[8:10]) or int(r[8]) == 0:
             continue
         size, left = int(r[8]), min(int(r[9]), int(r[8]))
+        full = size + (int(r[10]) if r[10].isascii() and r[10].isdigit() else 0) >= b
         if left * 10 > size:
-            if size >= b:  # only a plan the budget filled tells the budget is too large
+            if full:  # only a plan the budget filled tells the budget is too large
                 high, b = (size if size - left >= B_MIN else None), size - left
-        elif size >= b:
+        elif full:
             nb = round(b * 1.25)
             if high is not None:
                 if b >= high - 1:
