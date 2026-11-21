@@ -430,24 +430,52 @@ def count(s):
     return n
 
 
-def terms_behind_dashes(args):
-    """`sb recall` arguments with the search terms moved behind '--' when one starts with '-' (-1e-8, ---, -minus),
-    so that it is a term, not an option. Only the options of `recall` stay options."""
-    keep, terms, dashed, it = [], [], False, iter(args)
-    for t in it:
+def terms_behind_dashes(args, values=("-n", "-p", "--project"), flags=("-h", "--help", "--archive", "--inbox"),
+                        attached=r"-n\d+|-p.+|--project=.*", lists=(), strict=False):
+    """Arguments of a command with its texts (search terms, captured text) moved behind '--' when one starts with '-'
+    (-1e-8, ---, -minus), so that it is a text, not an option; the value of an option may start with '-' too (--why -bad).
+    Only the options named by values (one argument), lists (arguments up to the next '-') and flags stay options;
+    the defaults are those of `recall`. With strict, an unknown long option (--sorce) stays one, so argparse refuses it."""
+    longs = [o for o in values + flags + lists if o.startswith("--")]
+    keep, terms, dashed, i = [], [], False, 0
+    while i < len(args):
+        t, i = args[i], i + 1
         if t == "--":
-            terms.extend(it)
-            dashed = True
-        elif t in ("-n", "-p", "--project"):
+            terms.extend(args[i:])
+            dashed, i = True, len(args)
+        elif t in values or len(t) > 2 and t[:2] == "--" and "=" not in t and len(
+                {o for o in longs if o.startswith(t)}) == 1 and next(o for o in longs if o.startswith(t)) in values:
+            x, i = args[i:i + 1], i + 1  # an unambiguous prefix of an option with a value (--proj) takes its value too
+            if x and len(x[0]) > 1 and x[0][0] == "-":  # joined to the option, so that it cannot be taken for an option
+                keep.append(t + "=" * (len(t) > 2) + x[0])
+                dashed = True
+            else:
+                keep += [t] + x
+        elif t in lists:
             keep.append(t)
-            keep.extend(x for x in [next(it, None)] if x is not None)
-        elif (t in ("-h", "--help", "--archive", "--inbox") or re.fullmatch(r"-n\d+|-p.+|--project=.*", t)
-              or len(t) > 2 and t[:2] == "--" and any(o.startswith(t) for o in ("--archive", "--inbox", "--project", "--help"))):
+            while i < len(args) and args[i][:1] != "-":
+                keep.append(args[i])
+                i += 1
+        elif t in flags or re.fullmatch(attached, t) or len(t) > 2 and t[:2] == "--" and (
+                any(o.startswith(t) for o in longs) or strict and re.fullmatch(r"--[A-Za-z][\w-]*(=.*)?", t)):
             keep.append(t)
         else:
             terms.append(t)
             dashed = dashed or len(t) > 1 and t[0] == "-"
-    return keep + (["--"] if dashed else []) + terms
+    return keep + ["--"] + terms if terms else keep  # options first: argparse cannot take options between texts
+
+
+HELP, NO_ATTACHED = ("-h", "--help"), "(?!)"  # a pattern nothing matches
+TEXT_COMMANDS = {  # command -> options of terms_behind_dashes: the commands that take a free text
+    "recall": {},
+    "capture": dict(strict=True, values=("-p", "--project", "-s", "--source"), flags=HELP, attached=r"-p.+|--(project|source)=.*"),  # -sigma is a text
+    "new": dict(strict=True, values=("-p", "--project", "--why"), flags=HELP + ("--anyway",), attached=r"-p.+|--(project|why)=.*"),
+    "archive": dict(strict=True, values=("--why", "--reason"), lists=("--superseded-by",), flags=HELP + ("--fix-links",),
+                    attached=r"--(why|reason|superseded-by)=.*"),
+    "sleep veto": dict(strict=True, values=(), flags=HELP, attached=NO_ATTACHED),
+    "sleep unrelated": dict(strict=True, values=(), flags=HELP, attached=NO_ATTACHED),
+    "sleep unverifiable": dict(strict=True, values=(), flags=HELP, attached=NO_ATTACHED),
+}
 
 
 def main(argv=None) -> int:
@@ -532,8 +560,10 @@ def main(argv=None) -> int:
     cmd("rules", cmd_rules, "print the agent rules")
     cmd("hook", cmd_hook, "entry point for Claude Code hooks").add_argument("event", choices=("after-edit", "session-start"))
     argv = sys.argv[1:] if argv is None else list(argv)
-    if argv[:1] == ["recall"]:
-        argv = ["recall"] + terms_behind_dashes(argv[1:])
+    for n in (1, 2):
+        if (name := " ".join(argv[:n])) in TEXT_COMMANDS:
+            argv = argv[:n] + terms_behind_dashes(argv[n:], **TEXT_COMMANDS[name])
+            break
     a = p.parse_args(argv)
     try:
         if os.environ.get("SB_TODAY") and not DAY.fullmatch(os.environ["SB_TODAY"]):
