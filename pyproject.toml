@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "pytest-xdist"]
 review = ["numpy", "matplotlib>=3.5"]
 
 [project.urls]
@@ -41,3 +41,4 @@ scientific_brain = ["RULES.md"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]
+addopts = "-n auto"  # pytest-xdist: one worker per core
