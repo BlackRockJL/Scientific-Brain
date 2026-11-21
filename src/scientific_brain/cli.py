@@ -15,7 +15,7 @@ from statistics import median
 from . import __version__, inbox, review, sleep, update, usage
 from .index import Index, fts5_available, match_query
 from .links import WHYS, archive_mark, archive_note, backlinks, rename, restore
-from .schema import TYPES, check, project_error, skeleton
+from .schema import TYPES, check, misplaced, project_error, skeleton
 from .vault import DEFAULTS, LIFECYCLE, LIMITS, LOCATIONS, SLUG, SbError, find_vault
 
 SB_TOML = """# Scientific Brain vault configuration. Paths are relative to this file.
@@ -178,7 +178,7 @@ def cmd_new(a):
 
 def cmd_check(a):
     v, idx = _vault_index(a.rebuild)
-    only = idx.unchecked() if a.changed else None
+    only = idx.unchecked() | set(misplaced(v)) if a.changed else None
     issues, n = check(v, only)
     for i in issues:
         print(i)
@@ -201,9 +201,10 @@ def cmd_rename(a):
 
 def cmd_capture(a):
     v = find_vault()
-    if a.project and a.project != "_unsorted" and (m := project_error(v, a.project)):
-        raise SbError(m)
-    print(inbox.capture(v, " ".join(a.text), a.project or inbox.project_for_cwd(v), a.source, usage.today()))
+    project = a.project or inbox.project_for_cwd(v)  # a folder_map project is held to `projects` like -p
+    if project != "_unsorted" and (m := project_error(v, project)):
+        raise SbError(m if a.project else f"{m}; it comes from sb.toml folder_map, fix it there or give -p")
+    print(inbox.capture(v, " ".join(a.text), project, a.source, usage.today()))
 
 
 def cmd_inbox(a):
@@ -359,7 +360,7 @@ def cmd_hook(a):
             return 0
         v = find_vault(path.parent)
         rel = path.relative_to(v.root).as_posix()
-        if path.suffix != ".md" or rel.split("/")[0] != "notes":
+        if path.suffix != ".md" or rel.split("/")[0] not in LOCATIONS:
             return 0
     except (SbError, ValueError, OSError, IndexError, AttributeError, TypeError):
         return 0

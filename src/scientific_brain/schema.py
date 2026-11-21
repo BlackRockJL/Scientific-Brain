@@ -1,10 +1,12 @@
 """Note types, required fields and sections, limits, `check`, note skeletons."""
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 from .vault import LOCATIONS, SLUG, ParseError, Vault, quote
 
@@ -37,6 +39,22 @@ def project_error(v: Vault, project: str):
     return None
 
 
+def misplaced_rel(rel: str) -> bool:
+    """A .md file in notes/ or archive/ that is not <location>/<project>/<slug>.md (and not hidden): sb does not read it."""
+    parts = rel.split("/")
+    return parts[0] in LOCATIONS and rel.endswith(".md") and len(parts) != 3 and not any(x.startswith(".") for x in parts)
+
+
+def misplaced(v: Vault) -> list:
+    """Relative paths of the note files in the wrong place."""
+    out = []
+    for loc in LOCATIONS:
+        for d, dirs, names in os.walk(v.root / loc):
+            dirs[:] = [x for x in dirs if not x.startswith(".")]
+            out += [r for n in names if misplaced_rel(r := f"{Path(d).relative_to(v.root).as_posix()}/{n}")]
+    return sorted(out)
+
+
 def skeleton(typ: str, project: str, why: str, today: str) -> str:
     extra, sections = TYPES[typ]
     fm = [("title", "TODO"), ("type", typ), ("project", project), ("created", today), ("updated", today),
@@ -64,6 +82,11 @@ def check(v: Vault, only=None):
             add("warning", "sb.toml:1", f"BibTeX file not found: {f}")
     for rel in v.temp_files() if only is None else ():
         add("warning", f"{rel}:1", "temporary file of an interrupted write; delete it")
+    for f, proj in (v.cfg["folder_map"].items() if only is None else ()):  # a mapped project is held to `projects` like -p
+        if proj != "_unsorted" and (m := project_error(v, proj)):
+            add("error", "sb.toml:1", f"folder_map '{f}': {m}")
+    for rel in sorted(r for r in (misplaced(v) if only is None else only) if misplaced_rel(r)):
+        add("error", f"{rel}:1", f"note file in the wrong place; sb reads only {rel.split('/')[0]}/<project>/<slug>.md")
     files = {loc: sorted(v.scan(loc)) for loc in LOCATIONS}
     slugs: dict[str, list[str]] = {}
     for loc in LOCATIONS:

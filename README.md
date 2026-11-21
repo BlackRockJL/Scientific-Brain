@@ -82,7 +82,7 @@ Once set up, nothing needs to be done by hand. The plugin brings
 - a **session-start hook** that stays silent unless `sb` or the vault is missing or a sleep is due: never
   slept yet, more than 7 days since the last sleep, or the waiting work (inbox lines, unverified notes, forget
   candidates) reaching what one sleep takes (the learned budget) at least 5 hours after the last sleep;
-- an **after-edit hook** that checks each note the agent writes and reports schema errors back to it;
+- an **after-edit hook** that checks each note the agent writes in `notes/` or `archive/` (a note file outside `<project>/` too) and reports schema errors back to it;
 - the **sleeper** agent, which runs a due sleep. Other sessions may keep working in the vault meanwhile; their
   use of notes still counts (an edit of a note the running plan names is taken for the sleeper's).
 
