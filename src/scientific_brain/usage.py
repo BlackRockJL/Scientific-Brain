@@ -265,16 +265,19 @@ def scores(v: Vault, today: date, s0: dict | None = None) -> list:
 
 def forget_candidates(v: Vault, today: date, sc=None) -> list:
     """(slug, type, R, S) of notes/ whose retrievability fell below 1/2, lowest R first. A note an active note links to
-    is in use through it; links from faded notes protect nothing, so faded chains and cycles still fade."""
+    is in use through it; links from faded notes protect nothing, so faded chains and cycles still fade, nor do links
+    from a note kept active only by its seed, so an import with overview notes still fades one by one."""
     sc = scores(v, today) if sc is None else sc
     low = {s: (t, r, S) for s, t, _, r, S, _ in sc if r < 0.5 - EPS}
     used = set()
+    if low:  # events() drops index-found edits up to a note's seed day, so an import is no use, a later hand edit is
+        ev, sd = events(v, now=today), seeds(v, today)
     for rel in v.scan("notes") if low else ():
         try:
             n = v.read(rel)
         except SbError:
             continue
-        if n.slug not in low:
+        if n.slug not in low and (n.slug not in sd or any(d <= today for d in ev.get(n.slug, ()))):
             used.update(n.targets)
     return sorted(((s, t, r, S) for s, (t, r, S) in low.items() if s not in used), key=lambda x: (x[2], x[0]))
 
