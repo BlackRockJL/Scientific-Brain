@@ -64,7 +64,8 @@ def prefix_mismatches(notes: dict) -> Counter:
 
 
 def collect(v: Vault, day: date, project: str | None = None, since: date | None = None, top: int = 3) -> dict:
-    """Everything the report and the map show. Reads only; nothing is logged."""
+    """Everything the report and the map show. Reads only, nothing is logged; a snapshot in an old format is migrated
+    once, as by `sb stats`."""
     notes = sleep.load(v)
     arch = {}
     for rel in v.scan("archive"):
@@ -128,6 +129,7 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
         out = [o for i, (_, o) in inbox.done(v).items() if i in ids and o not in ("wait", "expired")]
         prom, settled = sum(o.startswith("note:") for o in out), len(out)
     questions = sorted(str(n.get("created")) for n in sel.values() if n.get("type") == "question")
+    snap, rest = sleep.snapshot(v), sleep.parked(v, day, notes)  # verify counts as in `sb stats` (sleep.backlog)
 
     group = (lambda s: sel[s].get("type")) if project else (lambda s: proj[s])
     members = defaultdict(list)
@@ -176,6 +178,9 @@ def collect(v: Vault, day: date, project: str | None = None, since: date | None 
             "inbound": inbound, "outdeg": {s: outdeg[s] for s in sel}, "dangling": dangling,
             "cross": cross if not project else Counter(),
             "unverified": sum(not n.get("verified") for n in sel.values()),
+            "baseline_only": sum(not n.get("verified") and sleep.checked(n, snap) for n in sel.values()),
+            "verify_waiting": sum(not sleep.checked(n, snap) and s not in rest for s, n in sel.items()),
+            "verify_parked": sum(not sleep.checked(n, snap) and s in rest for s, n in sel.items()),
             "questions": len(questions), "oldest_question": questions[0] if questions else None,
             "inbox_open": len(op), "inbox_due": due, "promotion": (prom, settled), "mismatch": prefix_mismatches(sel),
             "weeks": dict(sorted(weeks.items())), "last_sleep": usage.last_sleep(v), "warnings": warnings}
@@ -250,7 +255,9 @@ def report(inv: dict, image: str | None = None) -> str:
 
     prom, settled = inv["promotion"]
     out += ["", "## Upkeep", "",
-            f"- never verified: {inv['unverified']}",
+            f"- verify: {inv['verify_waiting']} wait for a sleep" + (f", {inv['verify_parked']} parked as unverifiable" if inv["verify_parked"] else ""),
+            f"- never verified by a sleep: {inv['unverified']}"
+            + (f", of these {inv['baseline_only']} accepted unchanged by `sb baseline`" if inv["baseline_only"] else ""),
             f"- open questions: {inv['questions']}" + (f", oldest from {inv['oldest_question']}" if inv["oldest_question"] else ""),
             f"- inbox: {inv['inbox_open']} open, {inv['inbox_due']} due; promotion rate "
             + (f"{prom / settled:.0%} of {settled}" if settled else "n/a")]
