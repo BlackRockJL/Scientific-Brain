@@ -104,6 +104,17 @@ def _corrupt(e: sqlite3.Error) -> bool:
     return type(e) is sqlite3.DatabaseError
 
 
+def _no_header(db) -> bool:
+    """A file that does not start like an SQLite database is damaged, whatever error SQLite gives for it (with a stale
+    WAL beside it, that can be a disk I/O error rather than 'not a database')."""
+    try:
+        with open(db, "rb") as f:
+            head = f.read(16)
+    except OSError:
+        return False
+    return bool(head) and head != b"SQLite format 3\x00"
+
+
 def _busy(e: sqlite3.Error) -> bool:
     return isinstance(e, sqlite3.OperationalError) and ("locked" in str(e) or "busy" in str(e))
 
@@ -176,7 +187,7 @@ class Index:
                         time.sleep(0.05)
                         continue
                     raise SbError(f"index error: {e} (another sb process holds the index; try again)")
-                if _corrupt(e):
+                if _corrupt(e) or _no_header(self.v.sb_dir / "index.sqlite"):
                     return self._heal(e)
                 low = str(e).lower()
                 hint = " (SQLite built with FTS5 and the trigram tokenizer is required)" if "fts5" in low or "tokenizer" in low else ""

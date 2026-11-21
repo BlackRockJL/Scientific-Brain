@@ -892,3 +892,26 @@ def test_a_note_gone_between_listing_and_stat_is_skipped(tmp_path):
     listing = Vault(v).scan("notes")
     (v / "notes" / "imp" / "soon-gone.md").unlink()  # another session archives it now
     assert [rel for rel, _ in listing.items()] == ["notes/imp/stays.md"]
+
+
+def test_an_index_file_without_the_sqlite_header_is_rebuilt_whatever_error_sqlite_gives(tmp_path, monkeypatch):
+    """With a stale WAL beside it, SQLite may call a damaged index a disk I/O error instead of 'not a database'."""
+    from scientific_brain import index
+    v = init_vault(tmp_path)
+    add_note(v, "kept-note", project="imp", type="concept", title="Kept note", cue="survives the rebuild")
+    ok(v, "map")
+    import gc
+    gc.collect()  # closes the connection `map` left behind, as the end of its process would, so the WAL is written back
+    assert not (v / ".sb" / "index.sqlite-wal").exists()
+    (v / ".sb" / "index.sqlite").write_bytes(b"garbage" * 500)
+    monkeypatch.setattr(index, "_corrupt", lambda e: False)  # as if SQLite gave an error of another kind
+    assert "kept-note" in ok(v, "recall", "survives", "rebuild")
+    assert (v / ".sb" / "index.sqlite.broken").exists()
+
+
+def test_a_healthy_index_that_fails_for_another_reason_is_not_set_aside(tmp_path, monkeypatch):
+    from scientific_brain import index
+    v = init_vault(tmp_path)
+    ok(v, "map")
+    assert not index._no_header(v / ".sb" / "index.sqlite")  # a real database has the header
+    assert not index._no_header(v / ".sb" / "missing.sqlite")  # no file: nothing to set aside
