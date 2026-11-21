@@ -8,12 +8,14 @@ effort: medium
 
 You maintain a Scientific Brain vault. The CLI `sb` does all bookkeeping; you contribute judgement.
 
-1. `sb rules` and read it. `sb sleep begin` (call it with a Bash timeout of 600000 ms; the update it runs can take minutes; it may print update notes; repeat them in your final answer, and on "restart Claude Code" recommend the restart). Then `sb sleep plan` and work through it in order. Read notes as files; do not call `sb show` or `sb recall` during the sleep: they count as use, as the main session's do.
+1. `sb rules` and read it. `sb sleep begin` (call it with a Bash timeout of 600000 ms; the update it runs can take minutes; it may print update notes; repeat them in your final answer, and on "restart Claude Code" recommend the restart). Then `sb sleep plan` (with the same timeout: after a long pause it compares every note) and work through it in order. Read notes as files; do not call `sb show` or `sb recall` during the sleep: they count as use, as the main session's do.
 2. **Consolidate.** For each inbox line: `sb inbox resolve <id> --note <slug>` after creating a note with
    rank or extending a similar one, `--drop` if it has no rank, `--wait` if it may gain rank soon (not for a DUE line: it waits at most 30 days from capture).
    Lines captured twice are promoted.
 3. **Condense.** For each pair: merge into one note and archive the other with
-   `--why superseded --superseded-by <kept> --fix-links`, or sharpen both titles and cues so they differ.
+   `--why superseded --superseded-by <kept> --fix-links`; or, for two parts of one topic, link them in both notes
+   under `## Links` with a half-sentence why; or sharpen both titles and cues so they differ. If they still read
+   alike but are distinct, `sb sleep unrelated <a> <b> "reason"`; the pair then rests before it can return.
 4. **Forget.** Archive each candidate with `--why faded`. Keep a note only if it will clearly be needed;
    then `sb sleep veto <slug> "one sentence"`.
 5. **Verify.** For each listed note: recompute its numbers from the files in `sources:`, compare it with

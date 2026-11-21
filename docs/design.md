@@ -130,7 +130,8 @@ for 90 days, and the growth of `S` with each use and veto does the rest.
 
 A note that an active note (one not below 1/2) links to is no candidate: sources and basic concepts are used
 through the notes that cite them, rarely on their own. Links from faded notes do not count, so a faded chain or
-cycle still fades.
+cycle still fades, nor do links from a note kept active only by its `baseline --seed` start use, so a seeded import
+with overview notes still fades one by one.
 
 ## Sleep
 
@@ -138,10 +139,13 @@ The plan is computed without a model; the agent only judges.
 
 - **Consolidate:** each open inbox line with its three most similar notes; pairs of similar inbox lines mark a
   finding captured twice.
-- **Condense:** for each note updated since the last sleep, a search with the eight rarest words of its title
+- **Condense:** for each note updated since the last sleep, and in turn for the others (each note on one day of a
+  30-day cycle, the shortest rest a note can learn, every day since the last sleep counting, so each note is compared
+  before it can fade and a pair no plan could list returns), a search with the eight rarest words of its title
   and cue; a pair is listed when the best other note covers at least 60 % of them, measured both ways and the smaller share
   counting (an overview note contains the words of every note it summarises), and neither links the other
-  (linked parts of one topic are not duplicates).
+  (linked parts of one topic are not duplicates), and it was not judged unrelated (`sb sleep unrelated`) lately: such a
+  pair rests like a rejected dream pair.
 - **Forget:** the candidates, lowest retrievability first.
 - **Verify:** notes not checked since they last changed, each with three nearest neighbours: a note is checked
   when the snapshot holds its content hash (ignoring the frontmatter field `verified:`, the `## Links` section and the targets of links, so a rename,

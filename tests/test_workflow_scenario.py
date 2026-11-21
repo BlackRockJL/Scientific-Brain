@@ -80,6 +80,7 @@ class Sim:
         before = dict(cands=len(cands), budget=usage.budget(v))
         self.ever_candidate |= {c[0] for c in cands}
         res = sleeper(root, self.rng, vocab=self.vocab, keep=self.keep)
+        res.update(self.new_candidates({c[0] for c in cands}, res, d))
         self.created |= set(res["created"])
         self.vetoed |= set(res["vetoed_slugs"])
         self.changes += len(res["created"]) + res["extended"] + res["merged"] + 1  # +1: the probe note
@@ -92,6 +93,19 @@ class Sim:
                               **{k: x for k, x in res.items() if not isinstance(x, list)}, **inv))
         self.t["sleep"] += t1 - t0
         self.t["check"] += time.perf_counter() - t1
+
+    def new_candidates(self, was: set, res, d) -> dict:
+        """Candidates that the sleep itself made: c_new notes that were no candidate at its start and are one at its end, of
+        which c_new_shielded are targets of a note the sleep archived that was no candidate then (a merge archives a note
+        whose links kept its targets from fading; the link is gone with it)."""
+        v = self.vault
+        now = {c[0] for c in usage.forget_candidates(v, d)}
+        shield = set()
+        for s in res["archived"]:
+            if s not in was and (rel := v.find(s, ("archive",))):
+                shield |= set(v.read(rel).targets)
+        new = now - was
+        return dict(c_new=len(new), c_new_shielded=len(new & shield), c_new_open=" ".join(sorted(new - shield)[:5]))
 
     def invariants(self, res, before, cands) -> dict:
         root, v = self.root, self.vault
@@ -160,7 +174,8 @@ def test_wave_of_forget_candidates_is_worked_off_by_the_sleeps(tmp_path, monkeyp
     for r in rows[peak:]:
         if r["c_cands"] >= r["c_budget"]:
             assert r["forget_listed"] >= int(0.8 * r["c_budget"]), r
-        assert r["c_after"] <= max(0, r["c_cands"] - r["faded"] - r["vetoed"]), r
+        assert r["c_new"] == r["c_new_shielded"], r  # a candidate the sleep made is the target of a note it merged away
+        assert r["c_after"] <= max(0, r["c_cands"] - r["faded"] - r["vetoed"]) + r["c_new"], r
 
     # the budget model: every sleep finishes its plan (the sleeper leaves under a tenth), so a full plan grows the budget by a
     # quarter up to B_MAX. With four fifths of each plan for forget, the wave of c0 candidates needs n sleeps:

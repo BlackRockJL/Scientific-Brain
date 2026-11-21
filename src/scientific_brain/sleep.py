@@ -417,15 +417,22 @@ def plan(v: Vault, idx, day: date) -> str:
         back = keys(f"{notes[o].get('title')} {notes[o].get('cue')}", 0, 8) or ws
         return min(sum(w in txt[o] for w in ws) / len(ws), sum(w in txt[s] for w in back) / len(back)) if ws else 0.0
 
-    found = {}  # near-duplicate pairs: frozenset -> coverage; after the first sleep only notes changed or created since
-    holds = Holders(txt)
+    span = int(usage.FLOOR)  # fixed: no learned rest is shorter, so each note is compared before it can fade, and no day shifts
+    gone = span if not last else min((day - last).days, span)
+
+    def turn(s) -> bool:
+        """The day of s in the rolling condense came since the last sleep, so a pair no plan could list returns."""
+        return (day.toordinal() - int(hashlib.sha1(s.encode()).hexdigest()[:8], 16)) % span < gone
+
+    found = {}  # near-duplicate pairs: frozenset -> coverage; notes changed or created since the last sleep, and the rest in turn
+    holds, apart = Holders(txt), locked(v, day, s0)  # a pair judged apart by `sleep unrelated` rests like a dream pair
     for s, n in notes.items():
-        if not fresh(s, n):
+        if not fresh(s, n) and not turn(s):
             continue
         ws = keys(f"{n.get('title')} {n.get('cue')}", 0, 8)
         # the index is asked only when some other note holds enough of the words to reach the coverage at all
         if ws and holds.some_cover(ws, s, lc["condense_coverage"]) and (hit := near(ws, s, 1, 0)) and (o := hit[0][0]) in notes:  # coverage is measured below, not by the index
-            if o in n.targets or s in notes[o].targets:  # linked parts of one topic are not duplicates
+            if o in n.targets or s in notes[o].targets or frozenset((s, o)) in apart:  # linked parts of one topic are not duplicates
                 continue
             pair, cov = frozenset((s, o)), cover(s, o, ws)
             if cov >= lc["condense_coverage"]:
@@ -660,7 +667,7 @@ def veto(v: Vault, slug: str, reason: str, day: date):
 
 
 def unrelated(v: Vault, a: str, b: str, reason: str, day: date):
-    """Log a dream pair as unrelated; it is locked for a while (see `locked`)."""
+    """Log a dream or condense pair as unrelated; it is locked for a while (see `locked`)."""
     for s in (a, b):
         if not v.find(s, ("notes",)):
             raise SbError(f"no note '{s}' in notes/")

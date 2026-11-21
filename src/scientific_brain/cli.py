@@ -538,7 +538,7 @@ def main(argv=None) -> int:
     q = sp.add_parser("veto", help="keep a forget candidate")
     q.add_argument("slug")
     q.add_argument("reason")
-    q = sp.add_parser("unrelated", help="judge a dream pair unrelated; it is locked for a while")
+    q = sp.add_parser("unrelated", help="judge a dream or condense pair unrelated; it is locked for a while")
     q.add_argument("a")
     q.add_argument("b")
     q.add_argument("reason")
