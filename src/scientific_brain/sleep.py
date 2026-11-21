@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from bisect import bisect_right
 from collections import Counter
 from datetime import date
 from itertools import permutations
@@ -142,8 +143,10 @@ def text_digest(raw: str, links=False) -> str:
 
 
 def digest(n) -> str:
-    """Content hash of a note as the snapshot holds it (see text_digest)."""
-    return text_digest(n.raw)
+    """Content hash of a note as the snapshot holds it (see text_digest); kept on the note, which never changes."""
+    if (d := n.__dict__.get("_digest")) is None:
+        d = n.__dict__["_digest"] = text_digest(n.raw)
+    return d
 
 
 def checked(n, snap: dict) -> bool:
@@ -301,10 +304,10 @@ def baseline(v: Vault, day: date, seed_days: int | None = None) -> tuple:
 
 def backlog(v: Vault, day: date) -> dict:
     """Work waiting for a sleep: undecided inbox lines, notes not checked since they changed, forget candidates."""
-    notes, snap = load(v), snapshot(v)
-    rest = parked(v, day, notes)
+    notes, snap, s0 = load(v), snapshot(v), usage.learned(v, day)  # what is learned is computed once for all three
+    rest = parked(v, day, notes, s0)
     return {"inbox": len(inbox.undecided(v, day)), "verify": sum(not checked(n, snap) and s not in rest for s, n in notes.items()),
-            "forget": len(usage.forget_candidates(v, day))}
+            "forget": len(usage.forget_candidates(v, day, usage.scores(v, day, s0)))}
 
 
 def load(v: Vault) -> dict:
@@ -322,6 +325,41 @@ def words(text) -> list:
     return list(dict.fromkeys(re.findall(r"\w+", text)))
 
 
+class Holders:
+    """Which notes contain a word as a substring of their folded text (as `cover` counts it), found in one string that
+    joins all texts, so a word costs one scan of memory and not one test per note."""
+
+    def __init__(self, txt: dict):
+        self.pos, self.memo, self.texts = {name: i for i, name in enumerate(txt)}, {}, list(txt.values())
+        self.starts, at = [], 0
+        for t in self.texts:
+            self.starts.append(at)
+            at += len(t) + 1
+        self.corpus = "\0".join(self.texts)
+
+    def of(self, w: str) -> frozenset:
+        """Indices of the notes whose text contains w."""
+        if (hit := self.memo.get(w)) is None:
+            out, i, n = set(), self.corpus.find(w), len(self.starts)
+            while i >= 0:
+                d = bisect_right(self.starts, i) - 1
+                out.add(d)
+                i = self.corpus.find(w, self.starts[d + 1]) if d + 1 < n else -1
+            hit = self.memo[w] = frozenset(out)
+        return hit
+
+    def some_cover(self, ws: list, skip: str, share: float) -> bool:
+        """True when a note other than skip contains enough of the words ws for found / len(ws) >= share. A note with
+        `need` of the k words contains at least one of any k - need + 1 of them, so only the holders of those are tested."""
+        k = len(ws)
+        need = next((c for c in range(k + 1) if c / k >= share), k + 1)
+        if need <= 0:
+            return True
+        me = self.pos.get(skip, -1)
+        pool = {d for w in ws[:k - need + 1] for d in self.of(w)} if need <= k else ()
+        return any(d != me and sum(w in self.texts[d] for w in ws) >= need for d in pool)
+
+
 def plan(v: Vault, idx, day: date) -> str:
     lc, notes, budget = v.cfg["lifecycle"], load(v), usage.budget(v)
     live = (st := started(v)) is not None and not stale(v, day)  # a forgotten marker is no running sleep: remember nothing, read nothing
@@ -332,10 +370,14 @@ def plan(v: Vault, idx, day: date) -> str:
     txt = {s: fold(f"{n.get('title')} {n.get('cue')} {n.body}") for s, n in notes.items()}
     df, lim = Counter(w for t in txt.values() for w in set(re.findall(r"\w+", t))), max(3, len(notes) // 2)
 
+    kept = {}  # (text, lo, cap) -> keys: df and lim are fixed for this plan, so a text always gives the same keys
+
     def keys(text, lo=0, cap=None) -> list:
         """Folded words of text that occur in lo..lim notes (stop words fall out), the rarest cap of them."""
-        ws = [w for w in prepare(words(text))[0] if lo <= df[w] <= lim]
-        return sorted(ws, key=lambda w: df[w])[:cap]
+        if (hit := kept.get((text, lo, cap))) is None:
+            ws = [w for w in prepare(words(text))[0] if lo <= df[w] <= lim]
+            hit = kept[text, lo, cap] = sorted(ws, key=lambda w: df[w])[:cap]
+        return list(hit)
 
     def near(ws, skip, n, cover=None, locs=("notes",)) -> list:
         return [r for r in idx.search(ws, locs, None, n + 1, cover)[0] if r[0] != skip][:n] if ws else []
@@ -376,11 +418,13 @@ def plan(v: Vault, idx, day: date) -> str:
         return min(sum(w in txt[o] for w in ws) / len(ws), sum(w in txt[s] for w in back) / len(back)) if ws else 0.0
 
     found = {}  # near-duplicate pairs: frozenset -> coverage; after the first sleep only notes changed or created since
+    holds = Holders(txt)
     for s, n in notes.items():
         if not fresh(s, n):
             continue
         ws = keys(f"{n.get('title')} {n.get('cue')}", 0, 8)
-        if ws and (hit := near(ws, s, 1, 0)) and (o := hit[0][0]) in notes:  # coverage is measured below, not by the index
+        # the index is asked only when some other note holds enough of the words to reach the coverage at all
+        if ws and holds.some_cover(ws, s, lc["condense_coverage"]) and (hit := near(ws, s, 1, 0)) and (o := hit[0][0]) in notes:  # coverage is measured below, not by the index
             if o in n.targets or s in notes[o].targets:  # linked parts of one topic are not duplicates
                 continue
             pair, cov = frozenset((s, o)), cover(s, o, ws)
@@ -588,10 +632,12 @@ def dream_pairs(v: Vault, notes, sc, day, found, keys, near, cover, fresh, s0=No
         ks = {}  # slug -> title and cue keys
 
         def key_set(s):
-            return ks.setdefault(s, set(keys(f"{notes[s].get('title')} {notes[s].get('cue')}")))
+            if (hit := ks.get(s)) is None:
+                hit = ks[s] = set(keys(f"{notes[s].get('title')} {notes[s].get('cue')}"))
+            return hit
 
-        far = sorted(((a, b) for a in top for b, n in notes.items() if n.get("type") in ("finding", "question")
-                      and n.folder != notes[a].folder and len(key_set(a) & key_set(b)) <= 1),
+        pool = [(b, n.folder, key_set(b)) for b, n in notes.items() if n.get("type") in ("finding", "question")]
+        far = sorted(((a, b) for a in top for b, fb, kb in pool if fb != notes[a].folder and len(key_set(a) & kb) <= 1),
                      key=lambda p: hashlib.sha256(f"{day}{p[0]}{p[1]}".encode()).hexdigest())
         for a, b in far:
             if not used & {a, b} and free(a, b):
@@ -689,9 +735,10 @@ def leftover(v: Vault, day: date, start: date) -> tuple:
         return size, 0, 0
     m, fol = usage.renames(v), usage.follower(v)
     booked = {i for i, d, o in booked_now(v, start) if o != "expired"}
-    cands = {s for s, *_ in usage.forget_candidates(v, day)}
+    s0 = usage.learned(v, day)
+    cands = {s for s, *_ in usage.forget_candidates(v, day, usage.scores(v, day, s0))}
     notes, snap = load(v), snapshot(v)
-    done, rest = remembered_now(v, "verified", notes), parked(v, day, notes)
+    done, rest = remembered_now(v, "verified", notes), parked(v, day, notes, s0)
     left = park = 0
     for item, n in work.items():
         kind, _, x = item.partition(":")

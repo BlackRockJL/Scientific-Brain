@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import functools
 import os
 import re
 import stat
 import threading
+import time
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,10 +71,15 @@ def read_raw(path) -> str:
         raise SbError(f"{path}: cannot read file: {e}") from e
 
 
+_WRITES = [0]  # counts write_atomic calls; the parsed notes are dropped when it changed
+_PARSED, _PARSED_MAX, _SETTLE_NS = {}, 20000, 2_000_000_000  # (vault root, rel) -> (file identity, Note)
+
+
 def write_atomic(path, text: str, mode=None):
     """Replace path by text via a temporary file in the same folder and os.replace, so a failed write leaves the old file
     whole. Line endings are written as given. The file keeps its mode (a new one gets mode, if given); a file without
     write permission is not replaced, as writing it in place would fail too."""
+    _WRITES[0] += 1
     real = Path(os.path.realpath(path))  # through a symlink, not over it
     try:
         st = os.stat(real)
@@ -163,7 +171,7 @@ class Note:
     def folder(self): return nfc(self.rel.split("/")[1])  # a folder from an NFD file system names the same project
     def get(self, k, d=""): return self.meta.get(k, d)
 
-    @property
+    @functools.cached_property
     def gist(self):
         para = []
         for ln in self.body.split("\n"):
@@ -173,13 +181,46 @@ class Note:
                 break
         return re.sub(r"^Gist:\s*", "", " ".join(para), flags=re.I)
 
-    @property
+    @functools.cached_property
     def targets(self):
         return list(dict.fromkeys(t.strip() for t in WIKI.findall(self.body)))
 
     @property
     def headings(self):
         return set(re.findall(r"^##[ \t]+(.+?)[ \t]*$", self.body, flags=re.M))
+
+
+class Listing(Mapping):
+    """The result of Vault.scan: rel path -> (mtime_ns, size), the stat read on first use of an entry."""
+
+    def __init__(self, entries: dict):
+        self._e, self._st = entries, {}
+
+    def __getitem__(self, rel):
+        if rel not in self._st:
+            st = self._e[rel].stat()
+            self._st[rel] = (st.st_mtime_ns, st.st_size)
+        return self._st[rel]
+
+    def __iter__(self):
+        return iter(self._e)
+
+    def items(self):
+        st = self._st
+        for rel, e in self._e.items():
+            if rel not in st:
+                try:
+                    x = e.stat()
+                except OSError:  # gone since the listing
+                    continue
+                st[rel] = (x.st_mtime_ns, x.st_size)
+            yield rel, st[rel]
+
+    def __len__(self):
+        return len(self._e)
+
+    def __contains__(self, rel):
+        return rel in self._e
 
 
 _HELD = threading.local()  # vault root -> depth of Vault.locked() in this thread
@@ -216,20 +257,24 @@ class Vault:
             f"[{k}]" + (" " + ", ".join(user[k]) if isinstance(user[k], dict) else "") for k in RETIRED if k in user]
         self.sb_dir = self.root / ".sb"
 
-    def scan(self, loc: str) -> dict:
-        """rel path -> (mtime_ns, size) for <loc>/<project>/*.md."""
+    def scan(self, loc: str) -> "Listing":
+        """rel path -> (mtime_ns, size) for <loc>/<project>/*.md. The names are listed at once; a file is stat-ed only
+        when its entry is asked for, so a caller that only walks the paths pays no stat per file."""
         out, base = {}, self.root / loc
         if base.is_dir():
             for d in os.scandir(base):
                 if d.is_dir() and not d.name.startswith("."):
+                    head = f"{loc}/{d.name}/"
                     for f in os.scandir(d.path):
-                        if f.name.endswith(".md") and not f.name.startswith("."):
-                            try:
-                                st = f.stat()
-                            except OSError:  # dangling symlink
-                                continue
-                            out[f"{loc}/{d.name}/{f.name}"] = (st.st_mtime_ns, st.st_size)
-        return out
+                        name = f.name
+                        if name.endswith(".md") and name[0] != ".":
+                            if f.is_symlink():
+                                try:
+                                    f.stat()
+                                except OSError:  # dangling symlink
+                                    continue
+                            out[head + name] = f
+        return Listing(out)
 
     @contextlib.contextmanager
     def locked(self):
@@ -292,25 +337,55 @@ class Vault:
 
     def find(self, slug: str, locs=LOCATIONS):
         """Relative path of the note with this slug (notes first), or None; file names compare in NFC."""
-        end = f"/{nfc(slug)}.md"
-        for loc in locs:
-            for rel in self.scan(loc):
-                if nfc(rel).endswith(end):
-                    return rel
-        return None
+        return next(iter(self.find_all(slug, locs)), None)
 
     def find_all(self, slug: str, locs=LOCATIONS) -> list:
         """Relative paths of all notes with this slug (check calls more than one an error), notes first."""
         end = f"/{nfc(slug)}.md"
-        return [rel for loc in locs for rel in self.scan(loc) if nfc(rel).endswith(end)]
+        if "/" in slug:  # a path-like name can match across the project folder
+            return [rel for loc in locs for rel in self.scan(loc) if nfc(rel).endswith(end)]
+        name, out = end[1:], []
+        for loc in locs:  # as scan, but only the files of this name are looked at
+            base = self.root / loc
+            if base.is_dir():
+                for d in os.scandir(base):
+                    if d.is_dir() and not d.name.startswith("."):
+                        for f in os.scandir(d.path):
+                            if (f.name == name or nfc(f.name) == name) and not f.name.startswith("."):
+                                if f.is_symlink():
+                                    try:
+                                        f.stat()
+                                    except OSError:  # dangling symlink
+                                        continue
+                                out.append(f"{loc}/{d.name}/{f.name}")
+        return out
 
     def read(self, rel: str) -> Note:
+        """The parsed note. A file is parsed once per process while its mtime, size and inode stay and no write_atomic ran
+        (every note write of sb goes through it); a file changed in the last two seconds is never kept, as a clock with
+        coarse ticks could give a later change the same mtime. A Note is never changed after it is made."""
+        if _PARSED.get("gen") != _WRITES[0] or len(_PARSED) > _PARSED_MAX:
+            _PARSED.clear()
+            _PARSED["gen"] = _WRITES[0]
+        path, ck = f"{self.root}/{rel}", (str(self.root), rel)
+        try:
+            st = os.stat(path)
+            key = (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            key = None
+        if key is not None and (hit := _PARSED.get(ck)) and hit[0] == key:
+            return hit[1]
         try:  # as read_raw: a lone CR stays, so the hash of a note is the same however it was read
-            raw = read_raw(self.root / rel).replace("\r\n", "\n")
+            raw = read_raw(path).replace("\r\n", "\n")
         except SbError as e:
             raise ParseError(f"{rel}:1", f"cannot read file: {e.__cause__}")
         meta, lines, body, bl = parse_frontmatter(raw, rel)
-        return Note(rel, meta, lines, body, bl, raw)
+        note = Note(rel, meta, lines, body, bl, raw)
+        if key is not None and time.time_ns() - key[0] > _SETTLE_NS:
+            _PARSED[ck] = (key, note)
+        else:
+            _PARSED.pop(ck, None)
+        return note
 
     def bib(self) -> dict:
         """Citation key -> {title, author, year} from the configured BibTeX files."""

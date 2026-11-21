@@ -33,22 +33,34 @@ PREFIX = re.compile(r"(?:slug|title|gist|cue|body|links):")  # only at the start
 TOKEN = re.compile(r"[^\W_]+")
 
 
+UMLAUT = str.maketrans("äöü", "aou")
+UE = re.compile(r"(?<![aeiouq])([aou])e(?=[a-z])(?![sd](?![a-z]))")
+DASHES = str.maketrans("–—", "--")
+POSSESSIVE = re.compile(r"['’]s$")
+
+
 def fold(s: str) -> str:
     """Lower case, ß->ss, ä/ö/ü->a/o/u, then ae/oe/ue->a/o/u unless after a vowel or q (queue), at a word end (due)
     or before a final s or d there (values, does, continued); accents removed."""
-    s = unicodedata.normalize("NFC", s).lower().replace("ß", "ss").translate(str.maketrans("äöü", "aou"))
-    s = re.sub(r"(?<![aeiouq])([aou])e(?=[a-z])(?![sd](?![a-z]))", r"\1", s)
+    s = unicodedata.normalize("NFC", s).lower().replace("ß", "ss").translate(UMLAUT)
+    s = UE.sub(r"\1", s)
+    if s.isascii():  # NFKD changes nothing in ASCII and no ASCII character combines
+        return s
     return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
 
 
 STOP = frozenset(map(fold, STOP_WORDS))
 
 
+@functools.lru_cache(maxsize=1 << 16)
+def _pieces(t: str) -> tuple:
+    return tuple((piece[m.end():] if (m := PREFIX.match(piece)) else piece).strip(PUNCT)
+                 for piece in (POSSESSIVE.sub("", p.strip(PUNCT)) for p in SPLIT.split(fold(t[:MAX_LEN]).translate(DASHES))))
+
+
 def clean_terms(t: str):
     """Folded pieces of one raw term without punctuation at the edges, column prefix or possessive 's."""
-    for piece in SPLIT.split(fold(t[:MAX_LEN]).translate(str.maketrans("–—", "--"))):
-        piece = re.sub(r"['’]s$", "", piece.strip(PUNCT))
-        yield (piece[m.end():] if (m := PREFIX.match(piece)) else piece).strip(PUNCT)
+    return iter(_pieces(t))
 
 
 def prepare(terms, short=False):
